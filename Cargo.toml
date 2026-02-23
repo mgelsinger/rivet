@@ -1,0 +1,20 @@
+[package]
+name = "rivet"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+description = "A simple, fast, and correct text editor for Windows"
+readme = "README.md"
+
+[[bin]]
+name = "rivet"
+path = "src/main.rs"
+
+# ── Release profile ──────────────────────────────────────────────────────────
+[profile.release]
+opt-level = 3
+strip = true          # strip symbols → smaller binary
+lto = true            # link-time optimisation
+codegen-units = 1     # single CG unit for best optimisation
+panic = "abort"       # no unwinding machinery; smaller + faster

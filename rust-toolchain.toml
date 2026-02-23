@@ -1,0 +1,6 @@
+# Pin the toolchain for reproducible builds.
+# Bump deliberately; do not rely on "latest stable" drifting under us.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets   = ["x86_64-pc-windows-msvc"]

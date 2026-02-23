@@ -1,0 +1,22 @@
+# Rust build output
+/target/
+
+# Cargo lock is committed for binaries (not libraries)
+# Cargo.lock intentionally tracked
+
+# IDE / editor artefacts
+.vscode/settings.json
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Windows artefacts
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Logs
+*.log
+/logs/

@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_INCREMENTAL: "0"   # disable incremental compilation in CI
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Format + Clippy + Tests ──────────────────────────────────────────────────
+  check:
+    name: Check (fmt · clippy · test)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # rust-toolchain.toml is also read, but we're explicit here for
+          # visibility in the Actions UI.
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo registry + build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      # Gate 1 – formatting
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      # Gate 2 – lints; -D warnings turns every warning into a hard error
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Gate 3 – tests
+      - name: cargo test
+        run: cargo test --all
+
+  # ── Release binary (main branch only) ────────────────────────────────────────
+  release-build:
+    name: Release Build (Windows x64)
+    runs-on: windows-latest
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo registry + build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Upload rivet.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: rivet-windows-x64
+          path: target/x86_64-pc-windows-msvc/release/rivet.exe
+          retention-days: 30
+          if-no-files-found: error

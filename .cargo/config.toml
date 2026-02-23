@@ -1,0 +1,11 @@
+# ── Default build target ──────────────────────────────────────────────────────
+# Rivet targets Windows x64 MSVC exclusively.
+# All local builds and CI runs use this target.
+[build]
+target = "x86_64-pc-windows-msvc"
+
+# ── Target-specific flags ─────────────────────────────────────────────────────
+[target.x86_64-pc-windows-msvc]
+# Statically link the MSVC CRT so the binary runs on bare Windows 10/11
+# without a Visual C++ Redistributable installation.
+rustflags = ["-C", "target-feature=+crt-static"]

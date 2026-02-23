@@ -1,0 +1,37 @@
+# cargo-deny configuration
+# Run manually: cargo deny check
+# Install:      cargo install cargo-deny
+
+[graph]
+targets = [{ triple = "x86_64-pc-windows-msvc" }]
+
+# ── Licence policy ────────────────────────────────────────────────────────────
+[licenses]
+# Only permissive licences allowed; no GPL, LGPL, AGPL, etc.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "MIT OR Apache-2.0",
+    "Unicode-DFS-2016",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+# ── Duplicate-crate policy ────────────────────────────────────────────────────
+[bans]
+multiple-versions = "warn"  # escalate to "deny" once the tree is stable
+wildcards         = "deny"  # no `*` version requirements
+
+# ── Advisory / vulnerability policy ──────────────────────────────────────────
+[advisories]
+version        = 2
+ignore         = []
+
+# ── Crate-source policy ───────────────────────────────────────────────────────
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"
+allow-registry   = ["https://github.com/rust-lang/crates.io-index"]

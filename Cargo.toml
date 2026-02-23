@@ -11,6 +11,20 @@ readme = "README.md"
 name = "rivet"
 path = "src/main.rs"
 
+# ── Runtime dependencies ──────────────────────────────────────────────────────
+[dependencies]
+# Win32 / WinRT bindings. Only the features we actually use are listed here;
+# add new features in the phase that first references the corresponding type.
+# Phase 1 declares the dependency; Phase 2 starts consuming the types.
+[dependencies.windows]
+version  = "0.58"
+features = [
+    "Win32_Foundation",            # HWND, HINSTANCE, BOOL, LRESULT, …
+    "Win32_Graphics_Gdi",          # HDC, HBRUSH, painting primitives
+    "Win32_System_LibraryLoader",  # LoadLibraryW, GetProcAddress, FreeLibrary
+    "Win32_UI_WindowsAndMessaging",# CreateWindowExW, RegisterClassExW, MSG, …
+]
+
 # ── Release profile ──────────────────────────────────────────────────────────
 [profile.release]
 opt-level = 3

@@ -1,6 +1,6 @@
 # Rivet — Architecture
 
-_Last updated: Phase 0 (scaffolding)_
+_Last updated: Phase 1 (UI stack decision)_
 
 ---
 
@@ -57,8 +57,58 @@ rivet/
         └── mod.rs
 ```
 
-Modules not yet implemented are listed here to establish the intended
-boundaries before any code is written.
+Modules marked _(Phase N)_ are planned but not yet present in the source tree.
+Their boundaries are established here before any code is written to avoid
+architectural drift.
+
+---
+
+## Phase 1 Decisions
+
+### Win32 bindings — `windows` crate v0.58
+
+The [`windows`](https://crates.io/crates/windows) crate (maintained by
+Microsoft) is used for all Win32 / WinRT FFI.  It provides:
+
+- **Feature-gated compilation** — only the Win32 modules we request are
+  compiled, keeping incremental build times reasonable.
+- **Safe wrappers** where available (COM, HRESULT error propagation).
+- **`windows-sys`** parity — raw `extern "system"` signatures are available
+  as a fallback when the safe wrappers are insufficient.
+
+Features enabled in `Cargo.toml` (add new features in the phase that first
+references the corresponding type):
+
+| Feature | First used |
+|---------|-----------|
+| `Win32_Foundation` | Phase 2 |
+| `Win32_Graphics_Gdi` | Phase 2 |
+| `Win32_System_LibraryLoader` | Phase 2 (Scintilla DLL load) |
+| `Win32_UI_WindowsAndMessaging` | Phase 2 |
+
+### Scintilla integration — DLL hosting
+
+**Decision: `SciLexer.dll` (DLL-hosting approach).**
+
+| Criterion | Static lib | DLL hosting |
+|-----------|-----------|-------------|
+| Build complexity | High (C++ via `cc`, needs `cl.exe`) | Low (no compilation) |
+| Distribution | Single `.exe` | `rivet.exe` + `SciLexer.dll` |
+| Abstraction boundary | Identical | Identical |
+| Scintilla design intent | Possible | Idiomatic |
+
+The safe abstraction in `editor::scintilla` is identical either way —
+switching to a static link in Phase 10 (packaging) is a `build.rs` change
+only, not a code change.
+
+**Version target:** Scintilla 5.x (latest stable at time of Phase 2
+integration; minimum 5.2 for `SCI_COUNTCHARACTERS`).
+
+**Load sequence (Phase 2):**
+1. `LoadLibraryW("SciLexer.dll")` from the directory of the running `.exe`.
+2. Scintilla registers the `"Scintilla"` window class on load.
+3. `CreateWindowExW` with class `"Scintilla"` creates the editor child window.
+4. All editor operations are `SendMessageW(hwnd, SCI_*, wparam, lparam)`.
 
 ---
 

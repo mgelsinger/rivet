@@ -1,6 +1,6 @@
 # Rivet — Architecture
 
-_Last updated: Phase 1 (UI stack decision)_
+_Last updated: Phase 3 (File I/O foundation)_
 
 ---
 
@@ -84,6 +84,8 @@ references the corresponding type):
 | `Win32_Foundation` | Phase 2 |
 | `Win32_Graphics_Gdi` | Phase 2 |
 | `Win32_System_LibraryLoader` | Phase 2 (Scintilla DLL load) |
+| `Win32_UI_Controls` | Phase 2 (status bar) |
+| `Win32_UI_Controls_Dialogs` | Phase 3 (open/save dialogs) |
 | `Win32_UI_WindowsAndMessaging` | Phase 2 |
 
 ### Scintilla integration — DLL hosting

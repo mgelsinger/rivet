@@ -23,6 +23,7 @@ features = [
     "Win32_Graphics_Gdi",          # HDC, HBRUSH, painting primitives
     "Win32_System_LibraryLoader",  # LoadLibraryW, GetProcAddress, FreeLibrary
     "Win32_UI_Controls",           # InitCommonControlsEx, status bar (Phase 2b)
+    "Win32_UI_Controls_Dialogs",   # GetOpenFileNameW, GetSaveFileNameW (Phase 3)
     "Win32_UI_WindowsAndMessaging",# CreateWindowExW, RegisterClassExW, MSG, …
 ]
 

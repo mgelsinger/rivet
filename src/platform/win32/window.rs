@@ -6,11 +6,12 @@
 //   • WM_CREATE  → load SciLexer.dll + create Scintilla + status-bar children.
 //   • WM_SIZE    → resize children to fill the client area.
 //   • WM_DESTROY → drop WindowState (releases DLL handle) + PostQuitMessage.
-//   • WM_COMMAND → File > Exit, Help > About.
+//   • WM_COMMAND → File > Open/Save/Save As/Exit, Help > About.
+//   • WM_NOTIFY  → Scintilla notifications (SCN_SAVEPOINTLEFT, SCN_UPDATEUI).
 //   • Expose a safe error-dialog helper for main().
 //
 // State threading: a `Box<WindowState>` is stored in GWLP_USERDATA.
-// It is set in WM_CREATE, read in WM_SIZE, and freed in WM_DESTROY.
+// It is set in WM_CREATE, read in WM_SIZE/NOTIFY/COMMAND, freed in WM_DESTROY.
 // All accesses happen on the single UI thread.
 
 #![allow(unsafe_code)]
@@ -22,22 +23,29 @@ use windows::{
         Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            AppendMenuW, CreateMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
-            DispatchMessageW, GetClientRect, GetMessage, GetWindowLongPtrW, LoadCursorW,
-            LoadIconW, MessageBoxW, PostQuitMessage, RegisterClassExW, SendMessageW, SetMenu,
-            SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UpdateWindow,
-            CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, IDI_APPLICATION, MB_ICONERROR, MB_OK,
-            MF_GRAYED, MF_POPUP, MF_STRING, MSG, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
-            WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASS_STYLES, WNDCLASSEXW, WM_CLOSE, WM_COMMAND,
-            WM_CREATE, WM_DESTROY, WM_SIZE, WS_CHILD, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW,
-            WS_VISIBLE, HMENU,
+            AppendMenuW, CreateAcceleratorTableW, CreateMenu, CreateWindowExW, DefWindowProcW,
+            DestroyWindow, DispatchMessageW, GetClientRect, GetMessage, GetWindowLongPtrW,
+            LoadCursorW, LoadIconW, MessageBoxW, PostQuitMessage, RegisterClassExW, SendMessageW,
+            SetMenu, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+            TranslateAcceleratorW, TranslateMessage, UpdateWindow, ACCEL, ACCEL_VIRT_FLAGS,
+            CW_USEDEFAULT, FCONTROL, FVIRTKEY, GWLP_USERDATA, HACCEL, IDC_ARROW, IDI_APPLICATION,
+            IDCANCEL, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNOCANCEL, MF_GRAYED,
+            MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SW_SHOW,
+            SWP_NOACTIVATE, SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASS_STYLES,
+            WNDCLASSEXW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NOTIFY, WM_SIZE,
+            WS_CHILD, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE, HMENU,
         },
     },
 };
 
 use crate::{
-    editor::scintilla::ScintillaView,
+    app::App,
+    editor::scintilla::{
+        messages::{SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI},
+        ScintillaView,
+    },
     error::{Result, RivetError},
+    platform::win32::dialogs::{show_open_dialog, show_save_dialog},
 };
 
 // ── Window identity ───────────────────────────────────────────────────────────
@@ -52,7 +60,10 @@ const DEFAULT_HEIGHT: i32 = 640;
 
 // ── Menu command IDs ──────────────────────────────────────────────────────────
 
-const IDM_FILE_EXIT: usize = 1001;
+const IDM_FILE_OPEN: usize = 1001;
+const IDM_FILE_SAVE: usize = 1002;
+const IDM_FILE_SAVE_AS: usize = 1003;
+const IDM_FILE_EXIT: usize = 1099;
 const IDM_HELP_ABOUT: usize = 9001;
 
 // ── Status bar ────────────────────────────────────────────────────────────────
@@ -66,11 +77,23 @@ const SBARS_SIZEGRIP: u32 = 0x0100;
 /// `SB_SETTEXT` message — sets the text of a status-bar part.
 const SB_SETTEXT: u32 = 0x0401;
 
+/// `SB_SETPARTS` message — sets the number of parts and their right-edge pixel
+/// positions.  WPARAM = part count; LPARAM = pointer to i32 array of edges.
+/// A right-edge of -1 means "extend to the end of the bar".
+const SB_SETPARTS: u32 = 0x0404;
+
+/// Width of the encoding part (e.g. "UTF-16 LE"), device pixels.
+const SB_PART_ENCODING_W: i32 = 120;
+/// Width of the EOL part (e.g. "CRLF"), device pixels.
+const SB_PART_EOL_W: i32 = 60;
+
 // ── Per-window state ──────────────────────────────────────────────────────────
 
 /// Heap-allocated state stored in `GWLP_USERDATA` for the lifetime of the
 /// main window (from WM_CREATE to WM_DESTROY, inclusive).
 struct WindowState {
+    /// Top-level application state (document, session, …).
+    app: App,
     /// The Scintilla editor child window (owns the DLL handle).
     sci: ScintillaView,
     /// The Win32 status bar child window.
@@ -98,6 +121,7 @@ pub(crate) fn run() -> Result<()> {
 
     register_class(hinstance)?;
     let hwnd = create_window(hinstance)?;
+    let haccel = create_accelerators()?;
 
     // SAFETY: hwnd was returned by CreateWindowExW and is valid.
     // ShowWindow / UpdateWindow return values are intentionally unused
@@ -113,7 +137,7 @@ pub(crate) fn run() -> Result<()> {
         t0.elapsed().as_secs_f64() * 1000.0
     );
 
-    message_loop()
+    message_loop(hwnd, haccel)
 }
 
 /// Show a modal "Fatal Error" dialog.  Safe to call from `main()`.
@@ -244,25 +268,25 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
         return Err(last_error("CreateWindowExW (status bar)"));
     }
 
-    // Set an initial placeholder text ("UTF-8 LF Ln 1, Col 1").
-    // Phase 3 will drive this from real document state.
-    let init_text: Vec<u16> = "UTF-8  LF  Ln 1, Col 1"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let app = App::new();
 
-    // SAFETY: hwnd_status is a valid status-bar window; SB_SETTEXT (0x0401)
-    // with part-index 0 and a valid PCWSTR in LPARAM is documented behaviour.
+    // Split the status bar into three parts: encoding | EOL | caret position.
+    // Right-edge positions in device pixels; the last entry is -1 (fill).
+    let parts: [i32; 3] = [SB_PART_ENCODING_W, SB_PART_ENCODING_W + SB_PART_EOL_W, -1];
+    // SAFETY: hwnd_status is valid; parts is a non-null i32 array.
     unsafe {
         let _ = SendMessageW(
             hwnd_status,
-            SB_SETTEXT,
-            WPARAM(0),
-            LPARAM(init_text.as_ptr() as isize),
+            SB_SETPARTS,
+            WPARAM(parts.len()),
+            LPARAM(parts.as_ptr() as isize),
         );
     }
 
-    Ok(WindowState { sci, hwnd_status })
+    let state = WindowState { app, sci, hwnd_status };
+    // SAFETY: hwnd_status and sci.hwnd() are valid child windows; app is initialised.
+    unsafe { update_status_bar(&state) };
+    Ok(state)
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────────
@@ -306,6 +330,14 @@ fn build_menu() -> Result<HMENU> {
 
         // File
         let file = CreateMenu().map_err(RivetError::from)?;
+        AppendMenuW(file, MF_STRING, IDM_FILE_OPEN, w!("&Open\u{2026}\tCtrl+O"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(file, MF_STRING | MF_GRAYED, IDM_FILE_SAVE, w!("&Save\tCtrl+S"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(file, MF_STRING | MF_GRAYED, IDM_FILE_SAVE_AS, w!("Save &As\u{2026}"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null())
+            .map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_EXIT, w!("E&xit\tAlt+F4"))
             .map_err(RivetError::from)?;
 
@@ -338,9 +370,29 @@ fn build_menu() -> Result<HMENU> {
     }
 }
 
+// ── Accelerator table ─────────────────────────────────────────────────────────
+
+/// Build the application-wide keyboard accelerator table.
+///
+/// Add one `ACCEL` entry per keyboard shortcut.  `cmd` must match the
+/// corresponding `IDM_*` constant so that `TranslateAcceleratorW` synthesises
+/// the right `WM_COMMAND` message.
+fn create_accelerators() -> Result<HACCEL> {
+    let ctrl_virt: ACCEL_VIRT_FLAGS = FCONTROL | FVIRTKEY;
+    let accels = [
+        ACCEL { fVirt: ctrl_virt, key: b'O' as u16, cmd: IDM_FILE_OPEN as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'S' as u16, cmd: IDM_FILE_SAVE as u16 },
+    ];
+
+    // SAFETY: accels is a valid, non-empty slice of ACCEL entries.
+    // CreateAcceleratorTableW copies the data into an OS-managed table.
+    let haccel = unsafe { CreateAcceleratorTableW(&accels) }.map_err(RivetError::from)?;
+    Ok(haccel)
+}
+
 // ── Message loop ──────────────────────────────────────────────────────────────
 
-fn message_loop() -> Result<()> {
+fn message_loop(hwnd: HWND, haccel: HACCEL) -> Result<()> {
     let mut msg = MSG::default();
     loop {
         // SAFETY: &mut msg is a valid MSG pointer.  HWND::default() (null)
@@ -352,9 +404,13 @@ fn message_loop() -> Result<()> {
             0 => break,
             _ => unsafe {
                 // SAFETY: msg was populated by a successful GetMessage call.
-                // Return values (WM_CHAR generated, handler LRESULT) are unused.
-                let _ = TranslateMessage(&msg);
-                let _ = DispatchMessageW(&msg);
+                // TranslateAcceleratorW checks for accelerator key combinations
+                // and synthesises WM_COMMAND messages; if it handles the
+                // message it returns non-zero and we skip normal translation.
+                if TranslateAcceleratorW(hwnd, haccel, &msg) == 0 {
+                    let _ = TranslateMessage(&msg);
+                    let _ = DispatchMessageW(&msg);
+                }
             },
         }
     }
@@ -418,6 +474,13 @@ unsafe extern "system" fn wnd_proc(
 
         // ── Teardown ──────────────────────────────────────────────────────────
         WM_CLOSE => {
+            // Guard against closing with unsaved changes.
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
+            if !ptr.is_null() && (*ptr).app.doc.dirty {
+                if !confirm_discard(hwnd) {
+                    return LRESULT(0); // user chose Cancel — abort close
+                }
+            }
             // SAFETY: hwnd is the window being closed; DestroyWindow triggers
             // WM_DESTROY which posts WM_QUIT.
             let _ = DestroyWindow(hwnd);
@@ -443,7 +506,27 @@ unsafe extern "system" fn wnd_proc(
         // ── Commands ──────────────────────────────────────────────────────────
         WM_COMMAND => {
             let cmd = wparam.0 & 0xFFFF;
+            // SAFETY: GWLP_USERDATA holds Box<WindowState> set in WM_CREATE.
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             match cmd {
+                IDM_FILE_OPEN => {
+                    if !ptr.is_null() {
+                        handle_file_open(hwnd, &mut *ptr);
+                    }
+                    LRESULT(0)
+                }
+                IDM_FILE_SAVE => {
+                    if !ptr.is_null() {
+                        handle_file_save(hwnd, &mut *ptr, false);
+                    }
+                    LRESULT(0)
+                }
+                IDM_FILE_SAVE_AS => {
+                    if !ptr.is_null() {
+                        handle_file_save(hwnd, &mut *ptr, true);
+                    }
+                    LRESULT(0)
+                }
                 IDM_FILE_EXIT => {
                     // SAFETY: see WM_CLOSE.
                     let _ = DestroyWindow(hwnd);
@@ -457,9 +540,166 @@ unsafe extern "system" fn wnd_proc(
             }
         }
 
+        // ── Scintilla notifications ────────────────────────────────────────────
+        WM_NOTIFY => {
+            // SAFETY: For WM_NOTIFY, LPARAM is a pointer to an NMHDR (or a
+            // larger struct beginning with NMHDR).  We only read the `code`
+            // field from the NMHDR prefix, which is always present.
+            let hdr = &*(lparam.0 as *const windows::Win32::UI::Controls::NMHDR);
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
+            if !ptr.is_null() {
+                match hdr.code {
+                    SCN_SAVEPOINTLEFT => {
+                        (*ptr).app.doc.dirty = true;
+                        update_window_title(hwnd, &(*ptr).app);
+                    }
+                    SCN_SAVEPOINTREACHED => {
+                        (*ptr).app.doc.dirty = false;
+                        update_window_title(hwnd, &(*ptr).app);
+                    }
+                    SCN_UPDATEUI => {
+                        // Caret moved or selection changed — refresh the status bar.
+                        // Also re-read EOL mode in case the user changed it.
+                        (*ptr).app.doc.eol = (*ptr).sci.eol_mode();
+                        update_status_bar(&*ptr);
+                    }
+                    _ => {}
+                }
+            }
+            LRESULT(0)
+        }
+
         // SAFETY: hwnd and all message args are valid — provided by Windows.
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+// ── File operations ───────────────────────────────────────────────────────────
+
+/// Handle File > Open: show dialog, read file, load into Scintilla.
+///
+/// # Safety
+/// Called only from WM_COMMAND on the UI thread with a valid `state`.
+unsafe fn handle_file_open(hwnd: HWND, state: &mut WindowState) {
+    let Some(path) = show_open_dialog(hwnd) else {
+        return; // user cancelled
+    };
+
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            let msg = format!("Could not open file:\n{e}");
+            show_error_dialog(&msg);
+            return;
+        }
+    };
+
+    let utf8 = state.app.open_file(path, &bytes);
+
+    // Configure Scintilla for the document.
+    state.sci.set_large_file_mode(state.app.doc.large_file);
+    state.sci.set_eol_mode(state.app.doc.eol);
+    state.sci.set_text(&utf8);
+    state.sci.set_save_point();
+
+    // Reflect the new title.
+    update_window_title(hwnd, &state.app);
+}
+
+/// Refresh all three status-bar parts from the current `WindowState`.
+///
+/// Parts:  0 = encoding  |  1 = EOL mode  |  2 = Ln / Col
+///
+/// # Safety
+/// `state.hwnd_status` and `state.sci.hwnd()` must be valid child windows.
+unsafe fn update_status_bar(state: &WindowState) {
+    let (line, col) = state.sci.caret_line_col();
+    let texts: [String; 3] = [
+        state.app.doc.encoding.as_str().to_owned(),
+        state.app.doc.eol.as_str().to_owned(),
+        format!("Ln {line}, Col {col}"),
+    ];
+    for (i, text) in texts.iter().enumerate() {
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: hwnd_status is valid; SB_SETTEXT with a valid part index and
+        // null-terminated UTF-16 LPARAM is documented behaviour.
+        let _ = SendMessageW(
+            state.hwnd_status,
+            SB_SETTEXT,
+            WPARAM(i),
+            LPARAM(wide.as_ptr() as isize),
+        );
+    }
+}
+
+/// Update the main window title from the current `App` state.
+///
+/// # Safety
+/// `hwnd` must be the valid main-window handle.
+unsafe fn update_window_title(hwnd: HWND, app: &App) {
+    let title = app.window_title();
+    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: hwnd is valid; wide is a null-terminated UTF-16 string.
+    // Return value (BOOL success) is intentionally unused.
+    let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
+}
+
+/// Handle File > Save (when `force_dialog` is false) or Save As (true).
+///
+/// If there is no current path, always opens the save dialog.
+///
+/// # Safety
+/// Called only from WM_COMMAND on the UI thread with a valid `state`.
+unsafe fn handle_file_save(hwnd: HWND, state: &mut WindowState, force_dialog: bool) {
+    // Determine the save path.
+    let path = if force_dialog || state.app.doc.path.is_none() {
+        let default = state
+            .app
+            .doc
+            .path
+            .as_deref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match show_save_dialog(hwnd, &default) {
+            Some(p) => p,
+            None => return, // user cancelled
+        }
+    } else {
+        state.app.doc.path.clone().unwrap()
+    };
+
+    let utf8 = state.sci.get_text();
+    match state.app.save(path, &utf8) {
+        Ok(()) => {
+            state.sci.set_save_point();
+            update_window_title(hwnd, &state.app);
+        }
+        Err(e) => {
+            let msg = format!("Could not save file:\n{e}");
+            show_error_dialog(&msg);
+        }
+    }
+}
+
+/// Ask the user what to do with unsaved changes.
+///
+/// Returns `true` if the close should proceed (user chose "Don't Save"),
+/// `false` if the user cancelled.
+///
+/// # Safety
+/// `hwnd` must be a valid window handle.
+unsafe fn confirm_discard(hwnd: HWND) -> bool {
+    let text = "This document has unsaved changes.\n\nDo you want to discard them and close?";
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let result = MessageBoxW(
+        hwnd,
+        PCWSTR(wide.as_ptr()),
+        w!("Rivet"),
+        MB_YESNOCANCEL | MB_ICONWARNING,
+    );
+    // IDYES = discard and close, IDCANCEL = stay open, IDNO = stay open
+    result == IDYES
 }
 
 // ── Helper dialogs ────────────────────────────────────────────────────────────

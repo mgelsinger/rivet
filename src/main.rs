@@ -9,6 +9,7 @@
 // Debug builds keep the console so that eprintln! timing output is visible.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app;
 mod editor;
 mod error;
 mod platform;

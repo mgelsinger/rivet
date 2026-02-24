@@ -17,6 +17,22 @@ pub enum RivetError {
 
     /// A standard I/O error (file open, read, write, …).
     Io(std::io::Error),
+
+    /// A file could not be decoded with the detected or requested encoding.
+    Encoding {
+        /// Human-readable description of the problem.
+        detail: &'static str,
+    },
+
+    /// A Scintilla message returned an unexpected result.
+    ///
+    /// Scintilla messages do not have structured error returns; this variant
+    /// is used when a return value falls outside the documented range (e.g.
+    /// an impossible position value).
+    ScintillaMsg {
+        /// The SCI_* constant (numeric value) that produced the unexpected result.
+        message: u32,
+    },
 }
 
 impl std::fmt::Display for RivetError {
@@ -26,6 +42,10 @@ impl std::fmt::Display for RivetError {
                 write!(f, "{function} failed (error {code:#010x})")
             }
             Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Encoding { detail } => write!(f, "encoding error: {detail}"),
+            Self::ScintillaMsg { message } => {
+                write!(f, "unexpected Scintilla result for message {message:#06x}")
+            }
         }
     }
 }
@@ -34,7 +54,7 @@ impl std::error::Error for RivetError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(e) => Some(e),
-            Self::Win32 { .. } => None,
+            Self::Win32 { .. } | Self::Encoding { .. } | Self::ScintillaMsg { .. } => None,
         }
     }
 }

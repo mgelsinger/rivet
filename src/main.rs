@@ -13,6 +13,8 @@ mod app;
 mod editor;
 mod error;
 mod platform;
+mod session;
+mod ui;
 
 fn main() {
     if let Err(e) = platform::win32::window::run() {

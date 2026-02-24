@@ -5,7 +5,7 @@
 //   • Attach a menu bar; run the Win32 message loop.
 //   • WM_CREATE  → load SciLexer.dll + create Scintilla + status-bar children.
 //   • WM_SIZE    → resize children to fill the client area.
-//   • WM_DESTROY → drop WindowState (releases DLL handle) + PostQuitMessage.
+//   • WM_DESTROY → drop WindowState (SciDll::drop calls FreeLibrary).
 //   • WM_COMMAND → File > Open/Save/Save As/Exit, Help > About.
 //   • WM_NOTIFY  → Scintilla notifications (SCN_SAVEPOINTLEFT, SCN_UPDATEUI).
 //   • Expose a safe error-dialog helper for main().
@@ -29,7 +29,7 @@ use windows::{
             SetMenu, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
             TranslateAcceleratorW, TranslateMessage, UpdateWindow, ACCEL, ACCEL_VIRT_FLAGS,
             CW_USEDEFAULT, FCONTROL, FVIRTKEY, GWLP_USERDATA, HACCEL, IDC_ARROW, IDI_APPLICATION,
-            IDCANCEL, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNOCANCEL, MF_GRAYED,
+            IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNOCANCEL, MF_GRAYED,
             MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SW_SHOW,
             SWP_NOACTIVATE, SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASS_STYLES,
             WNDCLASSEXW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NOTIFY, WM_SIZE,
@@ -42,7 +42,7 @@ use crate::{
     app::App,
     editor::scintilla::{
         messages::{SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI},
-        ScintillaView,
+        SciDll, ScintillaView,
     },
     error::{Result, RivetError},
     platform::win32::dialogs::{show_open_dialog, show_save_dialog},
@@ -91,11 +91,21 @@ const SB_PART_EOL_W: i32 = 60;
 
 /// Heap-allocated state stored in `GWLP_USERDATA` for the lifetime of the
 /// main window (from WM_CREATE to WM_DESTROY, inclusive).
+///
+/// # Drop order
+///
+/// Rust drops struct fields in declaration order:
+///   1. `app`       — pure Rust, no handles
+///   2. `sci_views` — child HWNDs already destroyed by Windows before WM_DESTROY
+///   3. `sci_dll`   — `FreeLibrary` fires here, safely after all views are gone
+///   4. `hwnd_status` — just an HWND value, no special cleanup
 struct WindowState {
-    /// Top-level application state (document, session, …).
+    /// Top-level application state (documents, active tab index, …).
     app: App,
-    /// The Scintilla editor child window (owns the DLL handle).
-    sci: ScintillaView,
+    /// One Scintilla child window per open tab; parallel to `app.tabs`.
+    sci_views: Vec<ScintillaView>,
+    /// RAII owner of `SciLexer.dll`; must outlive every `ScintillaView`.
+    sci_dll: SciDll,
     /// The Win32 status bar child window.
     hwnd_status: HWND,
 }
@@ -239,8 +249,15 @@ fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
 /// Called from WM_CREATE.  On failure the caller returns `LRESULT(-1)` to
 /// abort window creation, which causes `CreateWindowExW` to return null.
 fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<WindowState> {
-    // ── Scintilla ─────────────────────────────────────────────────────────────
-    let sci = ScintillaView::create(hwnd_parent, hinstance)?;
+    // ── Scintilla DLL ─────────────────────────────────────────────────────────
+    // Loading the DLL registers the "Scintilla" window class.
+    let sci_dll = SciDll::load()?;
+
+    // ── Scintilla view (initial tab) ──────────────────────────────────────────
+    // New views are created hidden; show the first one immediately.
+    let sci = ScintillaView::create(hwnd_parent, hinstance, &sci_dll)?;
+    sci.show(true);
+    let sci_views = vec![sci];
 
     // ── Status bar ────────────────────────────────────────────────────────────
     // `SBARS_SIZEGRIP` adds the resize grip at the bottom-right corner.
@@ -283,8 +300,8 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
         );
     }
 
-    let state = WindowState { app, sci, hwnd_status };
-    // SAFETY: hwnd_status and sci.hwnd() are valid child windows; app is initialised.
+    let state = WindowState { app, sci_views, sci_dll, hwnd_status };
+    // SAFETY: hwnd_status and the active sci_view's hwnd() are valid children.
     unsafe { update_status_bar(&state) };
     Ok(state)
 }
@@ -307,10 +324,10 @@ unsafe fn layout_children(state: &WindowState, client_width: i32, client_height:
     let _ = GetClientRect(state.hwnd_status, &mut sr);
     let status_h = sr.bottom; // sr.top is always 0 for a client rect
 
-    // Resize Scintilla to fill the remaining area above the status bar.
-    // SAFETY: sci.hwnd() is the Scintilla child HWND, valid until WM_DESTROY.
+    // Resize the active Scintilla view to fill the remaining area.
+    // SAFETY: the active sci_view's hwnd() is the Scintilla child HWND.
     let _ = SetWindowPos(
-        state.sci.hwnd(),
+        state.sci_views[state.app.active_idx].hwnd(),
         HWND::default(), // hWndInsertAfter ignored when SWP_NOZORDER is set
         0,
         0,
@@ -474,9 +491,9 @@ unsafe extern "system" fn wnd_proc(
 
         // ── Teardown ──────────────────────────────────────────────────────────
         WM_CLOSE => {
-            // Guard against closing with unsaved changes.
+            // Guard against closing with unsaved changes on the active tab.
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
-            if !ptr.is_null() && (*ptr).app.doc.dirty {
+            if !ptr.is_null() && (*ptr).app.active_doc().dirty {
                 if !confirm_discard(hwnd) {
                     return LRESULT(0); // user chose Cancel — abort close
                 }
@@ -488,7 +505,11 @@ unsafe extern "system" fn wnd_proc(
         }
 
         WM_DESTROY => {
-            // Retrieve and drop the WindowState, freeing the Scintilla DLL.
+            // Retrieve and drop the WindowState.
+            // Drop order: app → sci_views → sci_dll (FreeLibrary) → hwnd_status.
+            // sci_views' HWNDs are already invalid here (Windows destroyed child
+            // windows when the parent was destroyed), but ScintillaView has no
+            // Drop impl so that's fine.
             // SAFETY: GWLP_USERDATA holds the raw pointer from Box::into_raw
             // in WM_CREATE.  Clear it first to prevent re-entrancy.
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
@@ -550,17 +571,19 @@ unsafe extern "system" fn wnd_proc(
             if !ptr.is_null() {
                 match hdr.code {
                     SCN_SAVEPOINTLEFT => {
-                        (*ptr).app.doc.dirty = true;
+                        (*ptr).app.active_doc_mut().dirty = true;
                         update_window_title(hwnd, &(*ptr).app);
                     }
                     SCN_SAVEPOINTREACHED => {
-                        (*ptr).app.doc.dirty = false;
+                        (*ptr).app.active_doc_mut().dirty = false;
                         update_window_title(hwnd, &(*ptr).app);
                     }
                     SCN_UPDATEUI => {
-                        // Caret moved or selection changed — refresh the status bar.
+                        // Caret moved or selection changed — refresh status bar.
                         // Also re-read EOL mode in case the user changed it.
-                        (*ptr).app.doc.eol = (*ptr).sci.eol_mode();
+                        let idx = (*ptr).app.active_idx;
+                        let eol = (*ptr).sci_views[idx].eol_mode();
+                        (*ptr).app.active_doc_mut().eol = eol;
                         update_status_bar(&*ptr);
                     }
                     _ => {}
@@ -596,13 +619,14 @@ unsafe fn handle_file_open(hwnd: HWND, state: &mut WindowState) {
 
     let utf8 = state.app.open_file(path, &bytes);
 
-    // Configure Scintilla for the document.
-    state.sci.set_large_file_mode(state.app.doc.large_file);
-    state.sci.set_eol_mode(state.app.doc.eol);
-    state.sci.set_text(&utf8);
-    state.sci.set_save_point();
+    // Configure the active Scintilla view for the document.
+    let idx = state.app.active_idx;
+    let doc = state.app.active_doc();
+    state.sci_views[idx].set_large_file_mode(doc.large_file);
+    state.sci_views[idx].set_eol_mode(doc.eol);
+    state.sci_views[idx].set_text(&utf8);
+    state.sci_views[idx].set_save_point();
 
-    // Reflect the new title.
     update_window_title(hwnd, &state.app);
 }
 
@@ -611,12 +635,14 @@ unsafe fn handle_file_open(hwnd: HWND, state: &mut WindowState) {
 /// Parts:  0 = encoding  |  1 = EOL mode  |  2 = Ln / Col
 ///
 /// # Safety
-/// `state.hwnd_status` and `state.sci.hwnd()` must be valid child windows.
+/// `state.hwnd_status` and the active sci_view's hwnd() must be valid.
 unsafe fn update_status_bar(state: &WindowState) {
-    let (line, col) = state.sci.caret_line_col();
+    let idx = state.app.active_idx;
+    let (line, col) = state.sci_views[idx].caret_line_col();
+    let doc = state.app.active_doc();
     let texts: [String; 3] = [
-        state.app.doc.encoding.as_str().to_owned(),
-        state.app.doc.eol.as_str().to_owned(),
+        doc.encoding.as_str().to_owned(),
+        doc.eol.as_str().to_owned(),
         format!("Ln {line}, Col {col}"),
     ];
     for (i, text) in texts.iter().enumerate() {
@@ -652,10 +678,10 @@ unsafe fn update_window_title(hwnd: HWND, app: &App) {
 /// Called only from WM_COMMAND on the UI thread with a valid `state`.
 unsafe fn handle_file_save(hwnd: HWND, state: &mut WindowState, force_dialog: bool) {
     // Determine the save path.
-    let path = if force_dialog || state.app.doc.path.is_none() {
+    let path = if force_dialog || state.app.active_doc().path.is_none() {
         let default = state
             .app
-            .doc
+            .active_doc()
             .path
             .as_deref()
             .and_then(|p| p.file_name())
@@ -666,13 +692,14 @@ unsafe fn handle_file_save(hwnd: HWND, state: &mut WindowState, force_dialog: bo
             None => return, // user cancelled
         }
     } else {
-        state.app.doc.path.clone().unwrap()
+        state.app.active_doc().path.clone().unwrap()
     };
 
-    let utf8 = state.sci.get_text();
+    let idx = state.app.active_idx;
+    let utf8 = state.sci_views[idx].get_text();
     match state.app.save(path, &utf8) {
         Ok(()) => {
-            state.sci.set_save_point();
+            state.sci_views[idx].set_save_point();
             update_window_title(hwnd, &state.app);
         }
         Err(e) => {

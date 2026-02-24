@@ -1,27 +1,25 @@
 // ── Scintilla child-window hosting ────────────────────────────────────────────
 //
-// This is one of exactly two modules in the codebase where `unsafe` code is
-// permitted (the other is `platform::win32`).  Every `unsafe` block MUST
-// carry a `// SAFETY:` comment.
+// This is one of exactly two modules where `unsafe` is permitted.
+// Every `unsafe` block MUST carry a `// SAFETY:` comment.
 //
-// ── Integration decision (Phase 1 — confirmed Phase 2b) ──────────────────────
+// ── DLL ownership model (Phase 4) ─────────────────────────────────────────────
 //
-// Approach: DLL hosting (`SciLexer.dll`).
+// `SciDll` owns the single `LoadLibraryW` call for `SciLexer.dll`.  It is
+// stored in `WindowState` and lives longer than all `ScintillaView` instances.
+// `ScintillaView` holds only a child `HWND`; it no longer owns the DLL.
 //
-//   LoadLibraryW("SciLexer.dll")  →  registers "Scintilla" window class
-//   CreateWindowExW("Scintilla")  →  creates the editor child window
-//   SendMessageW(hwnd, SCI_*, …)  →  all editor operations
-//
-// `ScintillaView` owns both the child HWND and the DLL `HMODULE`.
-// `FreeLibrary` is called from `Drop`; by that point, Windows has already
-// destroyed the child HWND as part of parent-window destruction.
+// Drop order inside `WindowState` (Rust drops fields in declaration order):
+//   1. `app` (pure Rust, no HWNDs) — dropped first
+//   2. `sci_views` — structs with stale HWNDs (Windows already destroyed them
+//      as part of parent-window teardown before WM_DESTROY fired); no-op drop
+//   3. `sci_dll` — `FreeLibrary` called here, after all windows are gone ✓
 //
 // ── Security note ─────────────────────────────────────────────────────────────
 //
-// Phase 2b uses `LoadLibraryW("SciLexer.dll")` (filename only), which resolves
-// to the application directory first on Win10/11.
-// Phase 10 will harden this with `LoadLibraryExW` + full path to prevent
-// DLL-hijacking on machines with attacker-writable directories in the search path.
+// `SciDll::load()` calls `LoadLibraryW("SciLexer.dll")` (filename only).
+// Windows resolves this to the application directory first on Win10/11.
+// Phase 10 will harden this to `LoadLibraryExW` with a full path.
 
 #![allow(unsafe_code)]
 
@@ -29,8 +27,9 @@ pub mod messages;
 
 use messages::{
     SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_WRAP_NONE, SCLEX_NULL, SCI_GETCOLUMN,
-    SCI_GETCURRENTPOS, SCI_GETEOLMODE, SCI_GETLENGTH, SCI_GETTEXT, SCI_LINEFROMPOSITION,
-    SCI_SETCODEPAGE, SCI_SETLEXER, SCI_SETSAVEPOINT, SCI_SETTEXT, SCI_SETWRAPMODE,
+    SCI_GETCURRENTPOS, SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETTEXT,
+    SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_SETCODEPAGE, SCI_SETFIRSTVISIBLELINE, SCI_SETLEXER,
+    SCI_SETSAVEPOINT, SCI_SETTEXT, SCI_SETWRAPMODE, SCI_SETEOLMODE,
 };
 
 use windows::{
@@ -39,8 +38,8 @@ use windows::{
         Foundation::{GetLastError, HINSTANCE, HMODULE, HWND, LPARAM, WPARAM},
         System::LibraryLoader::{FreeLibrary, LoadLibraryW},
         UI::WindowsAndMessaging::{
-            CreateWindowExW, SendMessageW, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
-            WS_CLIPSIBLINGS, WS_VISIBLE,
+            CreateWindowExW, DestroyWindow, SendMessageW, ShowWindow, HMENU, SW_HIDE, SW_SHOW,
+            WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
         },
     },
 };
@@ -50,64 +49,82 @@ use crate::{
     error::{Result, RivetError},
 };
 
-// ── DLL / class identity ──────────────────────────────────────────────────────
+// ── DLL identity ──────────────────────────────────────────────────────────────
 
-/// File name of the Scintilla DLL, expected beside the running executable.
 const DLL_NAME: &str = "SciLexer.dll";
-
-/// Win32 window class registered by the Scintilla DLL on load.
 const CLASS_NAME: &str = "Scintilla";
+
+// ── SciDll ────────────────────────────────────────────────────────────────────
+
+/// RAII handle to the loaded `SciLexer.dll`.
+///
+/// Loading the DLL causes it to register the `"Scintilla"` window class.
+/// `FreeLibrary` is called on `Drop`, which should happen after all
+/// `ScintillaView` child windows have been destroyed.
+pub(crate) struct SciDll(HMODULE);
+
+impl SciDll {
+    /// Load `SciLexer.dll` from the application directory.
+    ///
+    /// This also registers the `"Scintilla"` Win32 window class, making it
+    /// available for `ScintillaView::create`.
+    pub(crate) fn load() -> Result<Self> {
+        let path: Vec<u16> = DLL_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: path is a valid null-terminated UTF-16 string.
+        // LoadLibraryW searches the application directory first on Win10/11.
+        let dll = unsafe { LoadLibraryW(PCWSTR(path.as_ptr())) }.map_err(RivetError::from)?;
+        Ok(Self(dll))
+    }
+}
+
+impl Drop for SciDll {
+    fn drop(&mut self) {
+        // SAFETY: self.0 was returned by a successful LoadLibraryW and has not
+        // been freed since.  All ScintillaView HWNDs are already destroyed
+        // (Windows destroys child windows before WM_DESTROY fires on the parent,
+        // and WindowState field order ensures sci_views drops before sci_dll).
+        unsafe {
+            let _ = FreeLibrary(self.0);
+        }
+    }
+}
 
 // ── ScintillaView ─────────────────────────────────────────────────────────────
 
 /// A hosted Scintilla editor child window.
 ///
-/// Owns the `SciLexer.dll` module handle; `FreeLibrary` is called on `Drop`.
-/// The child `HWND` itself is destroyed automatically by Windows when the
-/// parent window is destroyed — `Drop` does **not** call `DestroyWindow`.
+/// Does **not** own the `SciLexer.dll` module handle — that is owned by
+/// `SciDll` in `WindowState`.  The child `HWND` is destroyed automatically
+/// by Windows when the parent is destroyed; no explicit cleanup is needed.
 pub(crate) struct ScintillaView {
     hwnd: HWND,
-    dll: HMODULE,
 }
 
 impl ScintillaView {
-    /// Load `SciLexer.dll` and create a Scintilla child window inside
-    /// `hwnd_parent`.
+    /// Create a Scintilla child window inside `hwnd_parent`.
     ///
-    /// The window is created with zero size; `WM_SIZE` in the parent's
-    /// WndProc is responsible for calling `SetWindowPos` to give it its
-    /// real dimensions.
-    pub(crate) fn create(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Self> {
-        // Build a null-terminated UTF-16 DLL path (filename only; Windows
-        // searches the application directory first).
-        let dll_path: Vec<u16> = DLL_NAME
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-
-        // SAFETY: dll_path is a valid null-terminated UTF-16 string.
-        // LoadLibraryW registers the "Scintilla" window class on success.
-        let dll =
-            unsafe { LoadLibraryW(PCWSTR(dll_path.as_ptr())) }.map_err(RivetError::from)?;
-
+    /// `_dll` proves that `SciLexer.dll` is loaded and the `"Scintilla"` class
+    /// is registered.  The window is created hidden with zero size; call
+    /// `show(true)` and `SetWindowPos` to make it visible.
+    pub(crate) fn create(
+        hwnd_parent: HWND,
+        hinstance: HINSTANCE,
+        _dll: &SciDll,
+    ) -> Result<Self> {
         let class_wide: Vec<u16> =
             CLASS_NAME.encode_utf16().chain(std::iter::once(0)).collect();
 
-        // SAFETY: class_wide is a valid null-terminated UTF-16 string of the
-        // class name just registered by SciLexer.dll.
-        // hwnd_parent is the valid main-window HWND provided by WM_CREATE.
-        // hinstance is the exe's HINSTANCE obtained from GetModuleHandleW.
-        // Initial position/size (0,0,0,0) — WM_SIZE will give real dimensions.
+        // SAFETY: class_wide is null-terminated UTF-16 for the class registered
+        // by SciLexer.dll (_dll proves the DLL is loaded).  hwnd_parent and
+        // hinstance are valid Win32 handles from WM_CREATE.
+        // New views start hidden (no WS_VISIBLE) so only the active tab is shown.
         let hwnd = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 PCWSTR(class_wide.as_ptr()),
                 PCWSTR::null(),
-                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(0x0200_0000), // WS_CLIPCHILDREN
-                0,
-                0,
-                0,
-                0,
+                WS_CHILD | WS_CLIPSIBLINGS | WINDOW_STYLE(0x0200_0000), // WS_CLIPCHILDREN
+                0, 0, 0, 0,
                 hwnd_parent,
                 HMENU::default(),
                 hinstance,
@@ -119,171 +136,162 @@ impl ScintillaView {
             // SAFETY: GetLastError reads thread-local state set by the just-
             // failed CreateWindowExW; no Win32 calls between them.
             let code = unsafe { GetLastError().0 };
-            // Unload the DLL since we could not create the child window.
-            // SAFETY: dll was successfully loaded above and not freed yet.
-            unsafe { let _ = FreeLibrary(dll); }
-            return Err(RivetError::Win32 {
-                function: "CreateWindowExW (Scintilla)",
-                code,
-            });
+            return Err(RivetError::Win32 { function: "CreateWindowExW (Scintilla)", code });
         }
 
-        // ── Basic initialisation ──────────────────────────────────────────────
-
-        // SAFETY: hwnd is a valid Scintilla window returned above.
-        // SCI_SETCODEPAGE with SC_CP_UTF8 is a documented, safe initialisation.
+        // SAFETY: hwnd is a valid Scintilla window.  SCI_SETCODEPAGE with
+        // SC_CP_UTF8 is documented safe initialisation.
         unsafe {
             let _ = SendMessageW(hwnd, SCI_SETCODEPAGE, WPARAM(SC_CP_UTF8), LPARAM(0));
         }
 
-        Ok(Self { hwnd, dll })
+        Ok(Self { hwnd })
     }
 
-    /// Returns the Scintilla child window handle.
-    ///
-    /// The handle is valid until the parent window is destroyed.
+    /// The Scintilla child window handle.  Valid until the parent is destroyed.
     pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
     }
 
-    // ── Document operations ───────────────────────────────────────────────────
-
-    /// Replace all document text with the given UTF-8 bytes and reset the
-    /// undo history and save point.
-    ///
-    /// `text` must be valid UTF-8; the caller is responsible for transcoding
-    /// non-UTF-8 source files before calling this method.
-    pub(crate) fn set_text(&self, text: &[u8]) {
-        // Build a null-terminated copy — SCI_SETTEXT expects a C string.
-        let mut buf: Vec<u8> = Vec::with_capacity(text.len() + 1);
-        buf.extend_from_slice(text);
-        buf.push(0);
-
-        // SAFETY: hwnd is a valid Scintilla HWND.  buf is a null-terminated
-        // UTF-8 byte sequence that outlives this call.  SCI_SETTEXT with
-        // WPARAM(0) and a valid LPARAM string pointer is documented behaviour.
+    /// Show or hide this Scintilla view.  Used when switching tabs.
+    pub(crate) fn show(&self, visible: bool) {
+        let cmd = if visible { SW_SHOW } else { SW_HIDE };
+        // SAFETY: hwnd is a valid child window handle.
+        // ShowWindow return value (previous visibility) is intentionally unused.
         unsafe {
-            let _ = SendMessageW(
-                self.hwnd,
-                SCI_SETTEXT,
-                WPARAM(0),
-                LPARAM(buf.as_ptr() as isize),
-            );
+            let _ = ShowWindow(self.hwnd, cmd);
         }
     }
 
-    /// Mark the current document state as the save point (clears the dirty flag
-    /// in Scintilla's internal model and arms the `SCN_SAVEPOINTLEFT` notification).
+    /// Explicitly destroy the child HWND.
+    ///
+    /// Call this when closing a tab while the parent window is still alive.
+    /// After this call the `ScintillaView` must not be used; it should be
+    /// dropped immediately.
+    pub(crate) fn destroy(&self) {
+        // SAFETY: hwnd is a valid child window whose parent is still alive.
+        // DestroyWindow on a child triggers WM_DESTROY for the child only —
+        // no application WM_QUIT is posted.
+        unsafe {
+            let _ = DestroyWindow(self.hwnd);
+        }
+    }
+
+    // ── Document operations ───────────────────────────────────────────────────
+
+    /// Replace all document text (UTF-8) and reset the undo history and save point.
+    pub(crate) fn set_text(&self, text: &[u8]) {
+        let mut buf: Vec<u8> = Vec::with_capacity(text.len() + 1);
+        buf.extend_from_slice(text);
+        buf.push(0);
+        // SAFETY: hwnd valid; buf is null-terminated UTF-8 that outlives the call.
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_SETTEXT, WPARAM(0), LPARAM(buf.as_ptr() as isize));
+        }
+    }
+
+    /// Read the full document text as UTF-8 bytes (without null terminator).
+    pub(crate) fn get_text(&self) -> Vec<u8> {
+        // SAFETY: hwnd valid; SCI_GETLENGTH is a read-only query.
+        let len = unsafe {
+            SendMessageW(self.hwnd, SCI_GETLENGTH, WPARAM(0), LPARAM(0)).0 as usize
+        };
+        let mut buf = vec![0u8; len + 1];
+        // SAFETY: buf is len+1 bytes; SCI_GETTEXT with matching buffer size is safe.
+        unsafe {
+            let _ = SendMessageW(
+                self.hwnd, SCI_GETTEXT,
+                WPARAM(len + 1), LPARAM(buf.as_mut_ptr() as isize),
+            );
+        }
+        buf.truncate(len);
+        buf
+    }
+
+    /// Mark the current state as the save point.
     pub(crate) fn set_save_point(&self) {
-        // SAFETY: hwnd is a valid Scintilla HWND.  SCI_SETSAVEPOINT takes no
-        // parameters; WPARAM and LPARAM are ignored.
+        // SAFETY: hwnd valid; SCI_SETSAVEPOINT takes no parameters.
         unsafe {
             let _ = SendMessageW(self.hwnd, SCI_SETSAVEPOINT, WPARAM(0), LPARAM(0));
         }
     }
 
-    /// Enter or exit Large File Mode.
-    ///
-    /// In large-file mode the lexer is set to `SCLEX_NULL` (plain text) and
-    /// word wrap is disabled, both of which are required to keep Scintilla
-    /// responsive on huge files.
+    /// Enable or disable Large File Mode (plain-text lexer, no word wrap).
     pub(crate) fn set_large_file_mode(&self, enable: bool) {
         if enable {
-            // SAFETY: hwnd valid; SCI_SETLEXER with SCLEX_NULL is documented.
+            // SAFETY: hwnd valid; documented Scintilla messages.
             unsafe {
                 let _ = SendMessageW(self.hwnd, SCI_SETLEXER, WPARAM(SCLEX_NULL), LPARAM(0));
-                let _ =
-                    SendMessageW(self.hwnd, SCI_SETWRAPMODE, WPARAM(SC_WRAP_NONE), LPARAM(0));
+                let _ = SendMessageW(self.hwnd, SCI_SETWRAPMODE, WPARAM(SC_WRAP_NONE), LPARAM(0));
             }
         }
-        // Restoring the lexer / wrap mode after disabling large-file mode is
-        // deferred to Phase 7 (syntax highlighting).
     }
 
-    /// Read the full document text as UTF-8 bytes (without null terminator).
-    pub(crate) fn get_text(&self) -> Vec<u8> {
-        // SAFETY: hwnd is a valid Scintilla HWND.
-        // SCI_GETLENGTH returns the byte count (excluding null terminator).
-        let len =
-            unsafe { SendMessageW(self.hwnd, SCI_GETLENGTH, WPARAM(0), LPARAM(0)).0 as usize };
+    // ── Caret / position ──────────────────────────────────────────────────────
 
-        // Allocate len + 1 to hold the null terminator Scintilla writes.
-        let mut buf = vec![0u8; len + 1];
+    /// Raw byte offset of the caret (for session persistence).
+    pub(crate) fn caret_pos(&self) -> usize {
+        // SAFETY: hwnd valid; read-only query.
+        unsafe { SendMessageW(self.hwnd, SCI_GETCURRENTPOS, WPARAM(0), LPARAM(0)).0 as usize }
+    }
 
-        // SAFETY: buf is len+1 bytes and outlives this call.
-        // SCI_GETTEXT with WPARAM = buffer size (including null) and
-        // LPARAM = pointer to buffer is the documented read pattern.
+    /// Move the caret to a byte offset.
+    pub(crate) fn set_caret_pos(&self, pos: usize) {
+        // SAFETY: hwnd valid; SCI_GOTOPOS with a valid position is safe.
         unsafe {
-            let _ = SendMessageW(
-                self.hwnd,
-                SCI_GETTEXT,
-                WPARAM(len + 1),
-                LPARAM(buf.as_mut_ptr() as isize),
-            );
+            let _ = SendMessageW(self.hwnd, SCI_GOTOPOS, WPARAM(pos), LPARAM(0));
         }
-
-        buf.truncate(len); // drop the trailing null
-        buf
     }
 
-    // ── Caret / position queries ──────────────────────────────────────────────
+    /// First visible line index (0-based, for session persistence).
+    pub(crate) fn first_visible_line(&self) -> usize {
+        // SAFETY: hwnd valid; read-only query.
+        unsafe {
+            SendMessageW(self.hwnd, SCI_GETFIRSTVISIBLELINE, WPARAM(0), LPARAM(0)).0 as usize
+        }
+    }
 
-    /// Return the current caret position as a `(line, column)` pair
-    /// (both **1-based** for status-bar display).
-    ///
-    /// `column` counts character columns, taking tab stops into account.
+    /// Scroll to make `line` (0-based) the first visible line.
+    pub(crate) fn set_first_visible_line(&self, line: usize) {
+        // SAFETY: hwnd valid; documented Scintilla scroll message.
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_SETFIRSTVISIBLELINE, WPARAM(line), LPARAM(0));
+        }
+    }
+
+    /// 1-based (line, column) for status-bar display.
     pub(crate) fn caret_line_col(&self) -> (usize, usize) {
-        // SAFETY: hwnd is a valid Scintilla HWND.  All three messages are
-        // documented read-only queries with no side effects.
+        // SAFETY: hwnd valid; all three are read-only queries.
         unsafe {
             let pos = SendMessageW(self.hwnd, SCI_GETCURRENTPOS, WPARAM(0), LPARAM(0)).0 as usize;
-            let line =
-                SendMessageW(self.hwnd, SCI_LINEFROMPOSITION, WPARAM(pos), LPARAM(0)).0 as usize;
-            let col =
-                SendMessageW(self.hwnd, SCI_GETCOLUMN, WPARAM(pos), LPARAM(0)).0 as usize;
-            (line + 1, col + 1) // convert to 1-based
+            let line = SendMessageW(self.hwnd, SCI_LINEFROMPOSITION, WPARAM(pos), LPARAM(0)).0 as usize;
+            let col  = SendMessageW(self.hwnd, SCI_GETCOLUMN, WPARAM(pos), LPARAM(0)).0 as usize;
+            (line + 1, col + 1)
         }
     }
 
-    /// Return the EOL mode currently set in the document.
+    /// Current EOL mode.
     pub(crate) fn eol_mode(&self) -> EolMode {
-        // SAFETY: hwnd is a valid Scintilla HWND.  SCI_GETEOLMODE is a
-        // documented read-only query.
-        let mode = unsafe {
-            SendMessageW(self.hwnd, SCI_GETEOLMODE, WPARAM(0), LPARAM(0)).0
-        };
+        // SAFETY: hwnd valid; read-only query.
+        let mode = unsafe { SendMessageW(self.hwnd, SCI_GETEOLMODE, WPARAM(0), LPARAM(0)).0 };
         match mode {
             x if x == SC_EOL_CRLF => EolMode::Crlf,
-            x if x == SC_EOL_LF => EolMode::Lf,
-            x if x == SC_EOL_CR => EolMode::Cr,
-            _ => EolMode::Crlf, // defensive fallback
+            x if x == SC_EOL_LF   => EolMode::Lf,
+            x if x == SC_EOL_CR   => EolMode::Cr,
+            _                     => EolMode::Crlf,
         }
     }
 
-    /// Set the EOL mode used for newly inserted line endings.
+    /// Set the EOL mode for new lines.
     pub(crate) fn set_eol_mode(&self, eol: EolMode) {
         let mode = match eol {
             EolMode::Crlf => SC_EOL_CRLF,
-            EolMode::Lf => SC_EOL_LF,
-            EolMode::Cr => SC_EOL_CR,
+            EolMode::Lf   => SC_EOL_LF,
+            EolMode::Cr   => SC_EOL_CR,
         };
-        // SAFETY: hwnd valid; SCI_SETEOLMODE with a valid SC_EOL_* value is
-        // documented behaviour.
+        // SAFETY: hwnd valid; SCI_SETEOLMODE with a valid SC_EOL_* is documented.
         unsafe {
             let _ = SendMessageW(self.hwnd, SCI_SETEOLMODE, WPARAM(mode as usize), LPARAM(0));
-        }
-    }
-}
-
-impl Drop for ScintillaView {
-    fn drop(&mut self) {
-        // SAFETY: self.dll was successfully returned by LoadLibraryW (verified
-        // in create()) and has not been freed since.  When Drop runs the
-        // Scintilla HWND has already been destroyed by Windows (child windows
-        // are destroyed before WM_DESTROY fires on the parent), so the DLL's
-        // window-procedure is no longer reachable.
-        unsafe {
-            let _ = FreeLibrary(self.dll);
         }
     }
 }

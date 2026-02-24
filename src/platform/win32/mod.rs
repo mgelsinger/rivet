@@ -26,8 +26,9 @@ pub(crate) const SCINTILLA_DLL_NAME: &str = "SciLexer.dll";
 /// Win32 window class registered by the Scintilla DLL on load.
 pub(crate) const SCINTILLA_CLASS_NAME: &str = "Scintilla";
 
-// ── Sub-modules (populated Phase 2+) ─────────────────────────────────────────
+// ── Sub-modules ───────────────────────────────────────────────────────────────
 
-// pub mod window;   // Phase 2: main window, WndProc, message loop
+pub mod window; // Phase 2a: main window, WndProc, message loop
+
 // pub mod dialogs;  // Phase 3: common open/save/find dialogs
 // pub mod dpi;      // Phase 8: per-monitor DPI v2 helpers

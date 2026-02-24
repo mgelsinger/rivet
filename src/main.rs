@@ -5,11 +5,19 @@
 // Each unsafe block in those modules MUST carry a `// SAFETY:` comment.
 #![deny(unsafe_code)]
 
-// Phase 1: module skeletons wired in; implementations arrive in Phase 2.
+// Release builds run as a GUI application (no console window).
+// Debug builds keep the console so that eprintln! timing output is visible.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod editor;
+mod error;
 mod platform;
 
 fn main() {
-    // Phase 0 stub – replaced in Phase 2 with the real WinMain entry point.
-    println!("Rivet – not yet implemented");
+    if let Err(e) = platform::win32::window::run() {
+        // Startup failed before or during the message loop.
+        // Show a modal error dialog — the only safe output path in a GUI app.
+        platform::win32::window::show_error_dialog(&e.to_string());
+        std::process::exit(1);
+    }
 }

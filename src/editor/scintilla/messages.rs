@@ -33,8 +33,12 @@ pub(super) const SCLEX_NULL: usize = 1;
 
 /// Set word-wrap mode.
 pub(super) const SCI_SETWRAPMODE: u32 = 2268;
+/// Get word-wrap mode.
+pub(super) const SCI_GETWRAPMODE: u32 = 2269;
 /// Disable word wrap.
 pub(super) const SC_WRAP_NONE: usize = 0;
+/// Wrap at word boundaries.
+pub(super) const SC_WRAP_WORD: usize = 1;
 
 // ── Caret / position ──────────────────────────────────────────────────────────
 
@@ -67,6 +71,29 @@ pub(super) const SC_EOL_CRLF: isize = 0;
 pub(super) const SC_EOL_LF: isize = 1;
 /// EOL mode: old Mac `\r`.
 pub(super) const SC_EOL_CR: isize = 2;
+
+// ── Edit operations ───────────────────────────────────────────────────────────
+
+/// Undo the last action (Scintilla-specific; Scintilla also accepts WM_UNDO).
+pub(super) const SCI_UNDO: u32 = 2176;
+/// Redo the last undone action (no standard Win32 equivalent).
+pub(super) const SCI_REDO: u32 = 2179;
+/// Select all document text.
+pub(super) const SCI_SELECTALL: u32 = 2013;
+/// Convert existing EOL sequences to the mode given in WPARAM (SC_EOL_*).
+pub(super) const SCI_CONVERTEOLS: u32 = 2029;
+
+// Standard Win32 clipboard messages — Scintilla processes these natively.
+/// Cut selection to clipboard.
+pub(super) const WM_CUT:   u32 = 0x0300;
+/// Copy selection to clipboard.
+pub(super) const WM_COPY:  u32 = 0x0301;
+/// Paste from clipboard.
+pub(super) const WM_PASTE: u32 = 0x0302;
+/// Delete selection without copying.
+pub(super) const WM_CLEAR: u32 = 0x0303;
+/// Undo last action (Win32 standard; Scintilla also processes this).
+pub(super) const WM_UNDO:  u32 = 0x0304;
 
 // ── Notifications — pub(crate) for WM_NOTIFY dispatch in window.rs ────────────
 

@@ -26,10 +26,12 @@
 pub mod messages;
 
 use messages::{
-    SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_WRAP_NONE, SCLEX_NULL, SCI_GETCOLUMN,
-    SCI_GETCURRENTPOS, SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETTEXT,
-    SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_SETCODEPAGE, SCI_SETFIRSTVISIBLELINE, SCI_SETLEXER,
+    SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_WRAP_NONE, SC_WRAP_WORD, SCLEX_NULL,
+    SCI_CONVERTEOLS, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE,
+    SCI_GETLENGTH, SCI_GETTEXT, SCI_GETWRAPMODE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_REDO, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETFIRSTVISIBLELINE, SCI_SETLEXER,
     SCI_SETSAVEPOINT, SCI_SETTEXT, SCI_SETWRAPMODE, SCI_SETEOLMODE,
+    WM_CLEAR, WM_COPY, WM_CUT, WM_PASTE, WM_UNDO,
 };
 
 use windows::{
@@ -39,7 +41,7 @@ use windows::{
         System::LibraryLoader::{FreeLibrary, LoadLibraryW},
         UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, SendMessageW, ShowWindow, HMENU, SW_HIDE, SW_SHOW,
-            WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
+            WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPSIBLINGS,
         },
     },
 };
@@ -293,5 +295,83 @@ impl ScintillaView {
         unsafe {
             let _ = SendMessageW(self.hwnd, SCI_SETEOLMODE, WPARAM(mode as usize), LPARAM(0));
         }
+    }
+
+    // ── Edit operations ───────────────────────────────────────────────────────
+
+    /// Undo the last action.
+    pub(crate) fn undo(&self) {
+        // SAFETY: hwnd valid; WM_UNDO is a standard Win32 message Scintilla handles.
+        unsafe { let _ = SendMessageW(self.hwnd, WM_UNDO, WPARAM(0), LPARAM(0)); }
+    }
+
+    /// Redo the last undone action.
+    pub(crate) fn redo(&self) {
+        // SAFETY: hwnd valid; SCI_REDO takes no parameters.
+        unsafe { let _ = SendMessageW(self.hwnd, SCI_REDO, WPARAM(0), LPARAM(0)); }
+    }
+
+    /// Cut the current selection to the clipboard.
+    pub(crate) fn cut(&self) {
+        // SAFETY: hwnd valid; WM_CUT is processed natively by Scintilla.
+        unsafe { let _ = SendMessageW(self.hwnd, WM_CUT, WPARAM(0), LPARAM(0)); }
+    }
+
+    /// Copy the current selection to the clipboard.
+    pub(crate) fn copy_to_clipboard(&self) {
+        // SAFETY: hwnd valid; WM_COPY is processed natively by Scintilla.
+        unsafe { let _ = SendMessageW(self.hwnd, WM_COPY, WPARAM(0), LPARAM(0)); }
+    }
+
+    /// Paste from the clipboard at the caret position.
+    pub(crate) fn paste(&self) {
+        // SAFETY: hwnd valid; WM_PASTE is processed natively by Scintilla.
+        unsafe { let _ = SendMessageW(self.hwnd, WM_PASTE, WPARAM(0), LPARAM(0)); }
+    }
+
+    /// Delete the current selection without copying to the clipboard.
+    pub(crate) fn delete_selection(&self) {
+        // SAFETY: hwnd valid; WM_CLEAR is processed natively by Scintilla.
+        unsafe { let _ = SendMessageW(self.hwnd, WM_CLEAR, WPARAM(0), LPARAM(0)); }
+    }
+
+    /// Select all document text.
+    pub(crate) fn select_all(&self) {
+        // SAFETY: hwnd valid; SCI_SELECTALL takes no parameters.
+        unsafe { let _ = SendMessageW(self.hwnd, SCI_SELECTALL, WPARAM(0), LPARAM(0)); }
+    }
+
+    /// Convert all existing EOL sequences in the document to `eol`.
+    ///
+    /// This modifies the document content (triggers `SCN_SAVEPOINTLEFT`).
+    /// Call `set_eol_mode` afterwards so that new keystrokes also use the new style.
+    pub(crate) fn convert_eols(&self, eol: EolMode) {
+        let mode = match eol {
+            EolMode::Crlf => SC_EOL_CRLF,
+            EolMode::Lf   => SC_EOL_LF,
+            EolMode::Cr   => SC_EOL_CR,
+        };
+        // SAFETY: hwnd valid; SCI_CONVERTEOLS with a valid SC_EOL_* value is documented.
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_CONVERTEOLS, WPARAM(mode as usize), LPARAM(0));
+        }
+    }
+
+    /// Enable or disable word wrapping for this view.
+    pub(crate) fn set_word_wrap(&self, enabled: bool) {
+        let mode = if enabled { SC_WRAP_WORD } else { SC_WRAP_NONE };
+        // SAFETY: hwnd valid; SCI_SETWRAPMODE with SC_WRAP_WORD / SC_WRAP_NONE is documented.
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_SETWRAPMODE, WPARAM(mode), LPARAM(0));
+        }
+    }
+
+    /// Return `true` if word wrap is currently enabled.
+    pub(crate) fn is_word_wrap(&self) -> bool {
+        // SAFETY: hwnd valid; SCI_GETWRAPMODE is a read-only query.
+        let mode = unsafe {
+            SendMessageW(self.hwnd, SCI_GETWRAPMODE, WPARAM(0), LPARAM(0)).0 as usize
+        };
+        mode != SC_WRAP_NONE
     }
 }

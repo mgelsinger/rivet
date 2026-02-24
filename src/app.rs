@@ -81,6 +81,7 @@ pub(crate) struct DocumentState {
     pub(crate) eol:       EolMode,
     pub(crate) dirty:     bool,
     pub(crate) large_file: bool,
+    pub(crate) word_wrap:  bool,
 }
 
 impl DocumentState {
@@ -91,6 +92,7 @@ impl DocumentState {
             eol:       EolMode::Crlf,
             dirty:     false,
             large_file: false,
+            word_wrap:  false,
         }
     }
 

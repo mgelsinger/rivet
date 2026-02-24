@@ -19,28 +19,28 @@
 use windows::{
     core::{w, PCWSTR},
     Win32::{
-        Foundation::{GetLastError, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            AppendMenuW, CreateAcceleratorTableW, CreateMenu, CreateWindowExW, DefWindowProcW,
-            DestroyWindow, DispatchMessageW, GetClientRect, GetMessage, GetWindowLongPtrW,
-            LoadCursorW, LoadIconW, MessageBoxW, PostQuitMessage, RegisterClassExW, SendMessageW,
-            SetMenu, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-            TranslateAcceleratorW, TranslateMessage, UpdateWindow, ACCEL, ACCEL_VIRT_FLAGS,
-            CW_USEDEFAULT, FCONTROL, FVIRTKEY, GWLP_USERDATA, HACCEL, IDC_ARROW, IDI_APPLICATION,
-            IDNO, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MB_YESNOCANCEL,
-            MF_GRAYED,
-            MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SW_SHOW,
-            SWP_NOACTIVATE, SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASS_STYLES,
-            WNDCLASSEXW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NOTIFY, WM_SIZE,
-            WS_CHILD, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE, HMENU,
+            AppendMenuW, CheckMenuItem, CreateAcceleratorTableW, CreateMenu, CreateWindowExW,
+            DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMenu, GetMessage,
+            GetWindowLongPtrW, LoadCursorW, LoadIconW, MessageBoxW, PostQuitMessage,
+            RegisterClassExW, SendMessageW, SetMenu, SetWindowLongPtrW, SetWindowPos,
+            SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, UpdateWindow,
+            ACCEL, ACCEL_VIRT_FLAGS, CW_USEDEFAULT, FCONTROL, FVIRTKEY, GWLP_USERDATA, HACCEL,
+            IDC_ARROW, IDI_APPLICATION, IDNO, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK,
+            MB_YESNO, MB_YESNOCANCEL, MF_BYCOMMAND, MF_CHECKED, MF_POPUP,
+            MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
+            WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASS_STYLES, WNDCLASSEXW, WM_CLOSE, WM_COMMAND,
+            WM_CREATE, WM_DESTROY, WM_NOTIFY, WM_SIZE, WS_CHILD, WS_CLIPSIBLINGS,
+            WS_OVERLAPPEDWINDOW, WS_VISIBLE, HMENU,
         },
     },
 };
 
 use crate::{
-    app::App,
+    app::{App, EolMode},
     editor::scintilla::{
         messages::{SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI},
         SciDll, ScintillaView,
@@ -67,6 +67,21 @@ const IDM_FILE_SAVE: usize = 1002;
 const IDM_FILE_SAVE_AS: usize = 1003;
 const IDM_FILE_CLOSE: usize = 1004;
 const IDM_FILE_EXIT: usize = 1099;
+
+const IDM_EDIT_UNDO:       usize = 2000;
+const IDM_EDIT_REDO:       usize = 2001;
+const IDM_EDIT_CUT:        usize = 2002;
+const IDM_EDIT_COPY:       usize = 2003;
+const IDM_EDIT_PASTE:      usize = 2004;
+const IDM_EDIT_DELETE:     usize = 2005;
+const IDM_EDIT_SELECT_ALL: usize = 2006;
+
+const IDM_FORMAT_EOL_CRLF: usize = 3000;
+const IDM_FORMAT_EOL_LF:   usize = 3001;
+const IDM_FORMAT_EOL_CR:   usize = 3002;
+
+const IDM_VIEW_WORD_WRAP:  usize = 4000;
+
 const IDM_HELP_ABOUT: usize = 9001;
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
@@ -460,7 +475,7 @@ fn build_menu() -> Result<HMENU> {
     unsafe {
         let bar = CreateMenu().map_err(RivetError::from)?;
 
-        // File
+        // ── File ──────────────────────────────────────────────────────────────
         let file = CreateMenu().map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_NEW, w!("&New\tCtrl+N"))
             .map_err(RivetError::from)?;
@@ -468,9 +483,9 @@ fn build_menu() -> Result<HMENU> {
             .map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_OPEN, w!("&Open\u{2026}\tCtrl+O"))
             .map_err(RivetError::from)?;
-        AppendMenuW(file, MF_STRING | MF_GRAYED, IDM_FILE_SAVE, w!("&Save\tCtrl+S"))
+        AppendMenuW(file, MF_STRING, IDM_FILE_SAVE, w!("&Save\tCtrl+S"))
             .map_err(RivetError::from)?;
-        AppendMenuW(file, MF_STRING | MF_GRAYED, IDM_FILE_SAVE_AS, w!("Save &As\u{2026}"))
+        AppendMenuW(file, MF_STRING, IDM_FILE_SAVE_AS, w!("Save &As\u{2026}"))
             .map_err(RivetError::from)?;
         AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null())
             .map_err(RivetError::from)?;
@@ -481,26 +496,52 @@ fn build_menu() -> Result<HMENU> {
         AppendMenuW(file, MF_STRING, IDM_FILE_EXIT, w!("E&xit\tAlt+F4"))
             .map_err(RivetError::from)?;
 
-        // Edit  (populated Phase 5)
+        // ── Edit ──────────────────────────────────────────────────────────────
         let edit = CreateMenu().map_err(RivetError::from)?;
-        AppendMenuW(edit, MF_STRING | MF_GRAYED, 0, w!("&Undo\tCtrl+Z"))
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_UNDO, w!("&Undo\tCtrl+Z"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_REDO, w!("&Redo\tCtrl+Y"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_SEPARATOR, 0, PCWSTR::null())
+            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_CUT, w!("Cu&t\tCtrl+X"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_COPY, w!("&Copy\tCtrl+C"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_PASTE, w!("&Paste\tCtrl+V"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_DELETE, w!("&Delete"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_SEPARATOR, 0, PCWSTR::null())
+            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_SELECT_ALL, w!("Select &All\tCtrl+A"))
             .map_err(RivetError::from)?;
 
-        // View  (populated Phase 8)
+        // ── Format ────────────────────────────────────────────────────────────
+        let format = CreateMenu().map_err(RivetError::from)?;
+        AppendMenuW(format, MF_STRING, IDM_FORMAT_EOL_CRLF,
+            w!("Convert to &Windows (CRLF)")).map_err(RivetError::from)?;
+        AppendMenuW(format, MF_STRING, IDM_FORMAT_EOL_LF,
+            w!("Convert to &Unix (LF)")).map_err(RivetError::from)?;
+        AppendMenuW(format, MF_STRING, IDM_FORMAT_EOL_CR,
+            w!("Convert to &Classic Mac (CR)")).map_err(RivetError::from)?;
+
+        // ── View ──────────────────────────────────────────────────────────────
         let view = CreateMenu().map_err(RivetError::from)?;
-        AppendMenuW(view, MF_STRING | MF_GRAYED, 0, w!("Word &Wrap"))
+        AppendMenuW(view, MF_STRING, IDM_VIEW_WORD_WRAP, w!("Word &Wrap"))
             .map_err(RivetError::from)?;
 
-        // Help
+        // ── Help ──────────────────────────────────────────────────────────────
         let help = CreateMenu().map_err(RivetError::from)?;
         AppendMenuW(help, MF_STRING, IDM_HELP_ABOUT, w!("&About Rivet\u{2026}"))
             .map_err(RivetError::from)?;
 
-        // Bar
-        AppendMenuW(bar, MF_POPUP, file.0 as usize, w!("&File")).map_err(RivetError::from)?;
-        AppendMenuW(bar, MF_POPUP, edit.0 as usize, w!("&Edit")).map_err(RivetError::from)?;
-        AppendMenuW(bar, MF_POPUP, view.0 as usize, w!("&View")).map_err(RivetError::from)?;
-        AppendMenuW(bar, MF_POPUP, help.0 as usize, w!("&Help")).map_err(RivetError::from)?;
+        // ── Bar: File | Edit | Format | View | Help ───────────────────────────
+        AppendMenuW(bar, MF_POPUP, file.0   as usize, w!("&File"))  .map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, edit.0   as usize, w!("&Edit"))  .map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, format.0 as usize, w!("F&ormat")).map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, view.0   as usize, w!("&View"))  .map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, help.0   as usize, w!("&Help"))  .map_err(RivetError::from)?;
 
         Ok(bar)
     }
@@ -511,10 +552,16 @@ fn build_menu() -> Result<HMENU> {
 fn create_accelerators() -> Result<HACCEL> {
     let ctrl_virt: ACCEL_VIRT_FLAGS = FCONTROL | FVIRTKEY;
     let accels = [
-        ACCEL { fVirt: ctrl_virt, key: b'N' as u16, cmd: IDM_FILE_NEW   as u16 },
-        ACCEL { fVirt: ctrl_virt, key: b'O' as u16, cmd: IDM_FILE_OPEN  as u16 },
-        ACCEL { fVirt: ctrl_virt, key: b'S' as u16, cmd: IDM_FILE_SAVE  as u16 },
-        ACCEL { fVirt: ctrl_virt, key: b'W' as u16, cmd: IDM_FILE_CLOSE as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'N' as u16, cmd: IDM_FILE_NEW        as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'O' as u16, cmd: IDM_FILE_OPEN       as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'S' as u16, cmd: IDM_FILE_SAVE       as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'W' as u16, cmd: IDM_FILE_CLOSE      as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'Z' as u16, cmd: IDM_EDIT_UNDO       as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'Y' as u16, cmd: IDM_EDIT_REDO       as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'X' as u16, cmd: IDM_EDIT_CUT        as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'C' as u16, cmd: IDM_EDIT_COPY       as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'V' as u16, cmd: IDM_EDIT_PASTE      as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'A' as u16, cmd: IDM_EDIT_SELECT_ALL as u16 },
     ];
 
     // SAFETY: accels is a valid, non-empty slice of ACCEL entries.
@@ -653,6 +700,78 @@ unsafe extern "system" fn wnd_proc(
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
                 }
+
+                // ── Edit commands ─────────────────────────────────────────────
+                IDM_EDIT_UNDO => {
+                    if !ptr.is_null() {
+                        let idx = (*ptr).app.active_idx;
+                        (*ptr).sci_views[idx].undo();
+                    }
+                    LRESULT(0)
+                }
+                IDM_EDIT_REDO => {
+                    if !ptr.is_null() {
+                        let idx = (*ptr).app.active_idx;
+                        (*ptr).sci_views[idx].redo();
+                    }
+                    LRESULT(0)
+                }
+                IDM_EDIT_CUT => {
+                    if !ptr.is_null() {
+                        let idx = (*ptr).app.active_idx;
+                        (*ptr).sci_views[idx].cut();
+                    }
+                    LRESULT(0)
+                }
+                IDM_EDIT_COPY => {
+                    if !ptr.is_null() {
+                        let idx = (*ptr).app.active_idx;
+                        (*ptr).sci_views[idx].copy_to_clipboard();
+                    }
+                    LRESULT(0)
+                }
+                IDM_EDIT_PASTE => {
+                    if !ptr.is_null() {
+                        let idx = (*ptr).app.active_idx;
+                        (*ptr).sci_views[idx].paste();
+                    }
+                    LRESULT(0)
+                }
+                IDM_EDIT_DELETE => {
+                    if !ptr.is_null() {
+                        let idx = (*ptr).app.active_idx;
+                        (*ptr).sci_views[idx].delete_selection();
+                    }
+                    LRESULT(0)
+                }
+                IDM_EDIT_SELECT_ALL => {
+                    if !ptr.is_null() {
+                        let idx = (*ptr).app.active_idx;
+                        (*ptr).sci_views[idx].select_all();
+                    }
+                    LRESULT(0)
+                }
+
+                // ── Format — EOL conversion ───────────────────────────────────
+                IDM_FORMAT_EOL_CRLF => {
+                    if !ptr.is_null() { handle_eol_convert(hwnd, &mut *ptr, EolMode::Crlf); }
+                    LRESULT(0)
+                }
+                IDM_FORMAT_EOL_LF => {
+                    if !ptr.is_null() { handle_eol_convert(hwnd, &mut *ptr, EolMode::Lf); }
+                    LRESULT(0)
+                }
+                IDM_FORMAT_EOL_CR => {
+                    if !ptr.is_null() { handle_eol_convert(hwnd, &mut *ptr, EolMode::Cr); }
+                    LRESULT(0)
+                }
+
+                // ── View — Word Wrap ──────────────────────────────────────────
+                IDM_VIEW_WORD_WRAP => {
+                    if !ptr.is_null() { handle_word_wrap_toggle(hwnd, &mut *ptr); }
+                    LRESULT(0)
+                }
+
                 IDM_HELP_ABOUT => {
                     about_dialog(hwnd);
                     LRESULT(0)
@@ -693,6 +812,10 @@ unsafe extern "system" fn wnd_proc(
                         let mut rc = RECT::default();
                         let _ = GetClientRect(hwnd, &mut rc);
                         layout_children(&*ptr, rc.right, rc.bottom);
+
+                        // Reflect the new tab's word-wrap state in the View menu.
+                        let wrap = (*ptr).app.active_doc().word_wrap;
+                        update_wrap_checkmark(hwnd, wrap);
 
                         update_window_title(hwnd, &(*ptr).app);
                         update_status_bar(&*ptr);
@@ -817,6 +940,7 @@ unsafe fn load_file_into_active_tab(
     };
     state.sci_views[idx].set_large_file_mode(large_file);
     state.sci_views[idx].set_eol_mode(eol);
+    state.sci_views[idx].set_word_wrap(false); // always off on open; user toggles explicitly
     state.sci_views[idx].set_text(&utf8);
     state.sci_views[idx].set_save_point();
     sync_tab_label(state, idx);
@@ -857,6 +981,7 @@ unsafe fn open_file_in_new_tab(
     };
     state.sci_views[new_idx].set_large_file_mode(large_file);
     state.sci_views[new_idx].set_eol_mode(eol);
+    state.sci_views[new_idx].set_word_wrap(false); // always off on open; user toggles explicitly
     state.sci_views[new_idx].set_text(&utf8);
     state.sci_views[new_idx].set_save_point();
 
@@ -956,6 +1081,54 @@ unsafe fn handle_file_save(hwnd: HWND, state: &mut WindowState, force_dialog: bo
     }
 }
 
+// ── EOL conversion ────────────────────────────────────────────────────────────
+
+/// Handle Format > Convert to … : convert all existing EOL sequences and set
+/// the new default EOL mode.  Scintilla fires `SCN_SAVEPOINTLEFT` automatically
+/// after the conversion, so `doc.dirty` will be updated via the notification path.
+///
+/// # Safety
+/// Called only from WM_COMMAND on the UI thread with a valid `state`.
+unsafe fn handle_eol_convert(hwnd: HWND, state: &mut WindowState, eol: EolMode) {
+    let idx = state.app.active_idx;
+    // Convert all existing line endings and set the mode for new keystrokes.
+    state.sci_views[idx].convert_eols(eol);
+    state.sci_views[idx].set_eol_mode(eol);
+    state.app.active_doc_mut().eol = eol;
+    update_status_bar(state);
+    let _ = hwnd; // hwnd available for future use (e.g. title update)
+}
+
+// ── Word wrap toggle ──────────────────────────────────────────────────────────
+
+/// Handle View > Word Wrap: toggle word wrap for the active document.
+///
+/// # Safety
+/// Called only from WM_COMMAND on the UI thread with a valid `state`.
+unsafe fn handle_word_wrap_toggle(hwnd: HWND, state: &mut WindowState) {
+    let wrap = !state.app.active_doc().word_wrap;
+    state.app.active_doc_mut().word_wrap = wrap;
+    let idx = state.app.active_idx;
+    state.sci_views[idx].set_word_wrap(wrap);
+    update_wrap_checkmark(hwnd, wrap);
+}
+
+/// Update the View > Word Wrap checkmark to reflect `wrap`.
+///
+/// Uses `MF_BYCOMMAND` so the correct item is found regardless of the menu
+/// position of the View submenu (which shifted when Format was inserted).
+///
+/// # Safety
+/// `hwnd` must be the valid main-window handle.
+unsafe fn update_wrap_checkmark(hwnd: HWND, wrap: bool) {
+    let menu = GetMenu(hwnd);
+    // MF_BYCOMMAND | MF_{UN}CHECKED gives MENU_ITEM_FLAGS; CheckMenuItem wants u32.
+    let flag = (MF_BYCOMMAND | if wrap { MF_CHECKED } else { MF_UNCHECKED }).0;
+    // SAFETY: menu is the main window's menu bar (valid while the window exists).
+    // CheckMenuItem with MF_BYCOMMAND searches all submenus.
+    let _ = CheckMenuItem(menu, IDM_VIEW_WORD_WRAP as u32, flag);
+}
+
 // ── Status bar / title ────────────────────────────────────────────────────────
 
 /// Refresh all three status-bar parts from the current `WindowState`.
@@ -1036,9 +1209,12 @@ unsafe fn handle_close_tab(hwnd: HWND, state: &mut WindowState, idx: usize) {
         doc.large_file = false;
         doc.encoding   = crate::app::Encoding::Utf8;
         doc.eol        = crate::app::EolMode::Crlf;
+        doc.word_wrap  = false;
         state.sci_views[0].set_eol_mode(crate::app::EolMode::Crlf);
+        state.sci_views[0].set_word_wrap(false);
         state.sci_views[0].set_text(b"");
         state.sci_views[0].set_save_point();
+        update_wrap_checkmark(hwnd, false);
         sync_tab_label(state, 0);
         update_window_title(hwnd, &state.app);
         update_status_bar(state);

@@ -10,25 +10,10 @@
 // unsafe surface as small as possible.
 
 #![allow(unsafe_code)]
-// Items below are stubs whose users arrive in Phase 2.
-#![allow(dead_code)]
-
-// ── Scintilla DLL constants ───────────────────────────────────────────────────
-
-/// File name of the Scintilla DLL, expected beside the running executable.
-///
-/// Rivet uses the DLL-hosting approach rather than a compiled static lib:
-/// `LoadLibraryW(SCINTILLA_DLL_NAME)` on startup registers the `"Scintilla"`
-/// window class, after which child windows of that class are created with
-/// `CreateWindowExW`.  See `editor::scintilla` for the hosting layer.
-pub(crate) const SCINTILLA_DLL_NAME: &str = "SciLexer.dll";
-
-/// Win32 window class registered by the Scintilla DLL on load.
-pub(crate) const SCINTILLA_CLASS_NAME: &str = "Scintilla";
 
 // ── Sub-modules ───────────────────────────────────────────────────────────────
 
-pub mod window; // Phase 2a: main window, WndProc, message loop
+pub mod window; // Phase 2: main window, WndProc, message loop
 
 // pub mod dialogs;  // Phase 3: common open/save/find dialogs
 // pub mod dpi;      // Phase 8: per-monitor DPI v2 helpers

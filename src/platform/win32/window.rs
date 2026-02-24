@@ -1,50 +1,53 @@
 // ── Main window ───────────────────────────────────────────────────────────────
 //
-// Responsibilities in this file (unsafe confined here):
-//   • Register the main window class.
-//   • Create the top-level window and attach a menu bar.
-//   • Run the Win32 message loop.
-//   • Dispatch WM_COMMAND, WM_CLOSE, WM_DESTROY, WM_CREATE, WM_SIZE.
-//   • Expose a safe error-dialog helper for use by main().
+// Responsibilities:
+//   • Register the main window class and create the top-level window.
+//   • Attach a menu bar; run the Win32 message loop.
+//   • WM_CREATE  → load SciLexer.dll + create Scintilla + status-bar children.
+//   • WM_SIZE    → resize children to fill the client area.
+//   • WM_DESTROY → drop WindowState (releases DLL handle) + PostQuitMessage.
+//   • WM_COMMAND → File > Exit, Help > About.
+//   • Expose a safe error-dialog helper for main().
 //
-// Phase 2b will add:
-//   • WM_CREATE: load SciLexer.dll, create Scintilla child + status bar.
-//   • WM_SIZE: layout child controls to fill the client area.
+// State threading: a `Box<WindowState>` is stored in GWLP_USERDATA.
+// It is set in WM_CREATE, read in WM_SIZE, and freed in WM_DESTROY.
+// All accesses happen on the single UI thread.
 
 #![allow(unsafe_code)]
 
 use windows::{
     core::{w, PCWSTR},
     Win32::{
-        Foundation::{GetLastError, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{GetLastError, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             AppendMenuW, CreateMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
-            DispatchMessageW, GetMessage, LoadCursorW, LoadIconW, MessageBoxW,
-            PostQuitMessage, RegisterClassExW, SetMenu, ShowWindow, TranslateMessage,
-            UpdateWindow, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW,
-            IDI_APPLICATION, MB_ICONERROR, MB_OK, MF_GRAYED, MF_POPUP, MF_STRING,
-            MSG, SW_SHOW, WNDCLASSEXW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-            WM_SIZE, WS_OVERLAPPEDWINDOW, HMENU,
+            DispatchMessageW, GetClientRect, GetMessage, GetWindowLongPtrW, LoadCursorW,
+            LoadIconW, MessageBoxW, PostQuitMessage, RegisterClassExW, SendMessageW, SetMenu,
+            SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UpdateWindow,
+            CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, IDI_APPLICATION, MB_ICONERROR, MB_OK,
+            MF_GRAYED, MF_POPUP, MF_STRING, MSG, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
+            WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASS_STYLES, WNDCLASSEXW, WM_CLOSE, WM_COMMAND,
+            WM_CREATE, WM_DESTROY, WM_SIZE, WS_CHILD, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW,
+            WS_VISIBLE, HMENU,
         },
     },
 };
 
-use crate::error::{Result, RivetError};
+use crate::{
+    editor::scintilla::ScintillaView,
+    error::{Result, RivetError},
+};
 
 // ── Window identity ───────────────────────────────────────────────────────────
 
-/// Atom name used to register (and later find) the main window class.
 const CLASS_NAME: PCWSTR = w!("RivetMainWindow");
-
-/// Title bar text.
 const APP_TITLE: PCWSTR = w!("Rivet");
 
-/// Default client width in device pixels (before DPI scaling in Phase 8).
+/// Default window width, device pixels (DPI scaling added in Phase 8).
 const DEFAULT_WIDTH: i32 = 960;
-
-/// Default client height in device pixels.
+/// Default window height, device pixels.
 const DEFAULT_HEIGHT: i32 = 640;
 
 // ── Menu command IDs ──────────────────────────────────────────────────────────
@@ -52,51 +55,68 @@ const DEFAULT_HEIGHT: i32 = 640;
 const IDM_FILE_EXIT: usize = 1001;
 const IDM_HELP_ABOUT: usize = 9001;
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Status bar ────────────────────────────────────────────────────────────────
 
-/// Register the main window class, create the window, and drive the message
-/// loop until the user closes the application.
+/// Win32 window class for the common-controls status bar.
+const STATUS_CLASS: PCWSTR = w!("msctls_statusbar32");
+
+/// `SBARS_SIZEGRIP` — adds a resize grip at the bottom-right corner.
+const SBARS_SIZEGRIP: u32 = 0x0100;
+
+/// `SB_SETTEXT` message — sets the text of a status-bar part.
+const SB_SETTEXT: u32 = 0x0401;
+
+// ── Per-window state ──────────────────────────────────────────────────────────
+
+/// Heap-allocated state stored in `GWLP_USERDATA` for the lifetime of the
+/// main window (from WM_CREATE to WM_DESTROY, inclusive).
+struct WindowState {
+    /// The Scintilla editor child window (owns the DLL handle).
+    sci: ScintillaView,
+    /// The Win32 status bar child window.
+    hwnd_status: HWND,
+}
+
+// ── Public entry points ───────────────────────────────────────────────────────
+
+/// Register the main window class, create the window, and run the message
+/// loop.  Returns when the user closes the application.
 ///
-/// Records a startup timestamp and logs elapsed time (debug builds only) once
-/// the window is first shown on screen.
+/// Logs the startup time to stderr in debug builds.
 pub(crate) fn run() -> Result<()> {
-    // Startup benchmark harness — only compiled in debug builds so the
-    // variable is never unused in release mode.
     #[cfg(debug_assertions)]
     let t0 = std::time::Instant::now();
 
-    // SAFETY: GetModuleHandleW(None) returns the .exe's own HMODULE, which is
-    // always valid for the process lifetime and never fails in practice.
+    // SAFETY: GetModuleHandleW(None) always succeeds — it returns the exe's
+    // own module handle and never fails in a normally-loaded process.
     let hmodule = unsafe { GetModuleHandleW(None) }.map_err(RivetError::from)?;
 
-    // HINSTANCE and HMODULE represent the same underlying value on Windows
-    // (guaranteed by the Win32 ABI).  In windows-crate >=0.52 HINSTANCE is a
-    // type alias for HMODULE; we use the explicit field conversion so the code
-    // compiles regardless of whether they are distinct types.
+    // HINSTANCE and HMODULE represent the same Win32 value (guaranteed by the
+    // ABI).  The explicit field conversion compiles regardless of whether the
+    // windows crate version treats them as the same or distinct types.
     let hinstance = HINSTANCE(hmodule.0);
 
     register_class(hinstance)?;
     let hwnd = create_window(hinstance)?;
 
-    // SAFETY: hwnd was just returned by CreateWindowExW and is valid.
-    // ShowWindow returns the previous visibility state; UpdateWindow returns
-    // a success BOOL — both are intentionally ignored here.
+    // SAFETY: hwnd was returned by CreateWindowExW and is valid.
+    // ShowWindow / UpdateWindow return values are intentionally unused
+    // (previous-visibility state and a success BOOL, respectively).
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
     }
 
-    // Startup milestone — window is now visible on screen.
     #[cfg(debug_assertions)]
-    eprintln!("[rivet] window visible in {:.1} ms", t0.elapsed().as_secs_f64() * 1000.0);
+    eprintln!(
+        "[rivet] window visible in {:.1} ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
 
     message_loop()
 }
 
-/// Show a modal error dialog with the given message.
-///
-/// Safe to call from any context; performs the UTF-16 conversion internally.
-/// Used by `main()` when `run()` returns an error.
+/// Show a modal "Fatal Error" dialog.  Safe to call from `main()`.
 pub(crate) fn show_error_dialog(message: &str) {
     let msg_wide: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
     let title_wide: Vec<u16> = "Rivet — Fatal Error"
@@ -104,10 +124,9 @@ pub(crate) fn show_error_dialog(message: &str) {
         .chain(std::iter::once(0))
         .collect();
 
-    // SAFETY: msg_wide and title_wide are valid null-terminated UTF-16 strings
-    // that remain allocated for the duration of the MessageBoxW call.
-    // HWND::default() (null) means the dialog has no owner window.
-    // Return value (button pressed) is intentionally unused for an error dialog.
+    // SAFETY: both Vecs are valid null-terminated UTF-16 strings that outlive
+    // this call.  HWND::default() (null) means no owner window.
+    // Return value (button pressed) is intentionally unused.
     unsafe {
         let _ = MessageBoxW(
             HWND::default(),
@@ -118,29 +137,24 @@ pub(crate) fn show_error_dialog(message: &str) {
     }
 }
 
-// ── Window class registration ─────────────────────────────────────────────────
+// ── Window class + creation ───────────────────────────────────────────────────
 
 fn register_class(hinstance: HINSTANCE) -> Result<()> {
-    // SAFETY: LoadIconW with IDI_APPLICATION always succeeds; it loads the
-    // built-in application icon resource, which exists on all Windows versions.
-    let icon = unsafe { LoadIconW(None, IDI_APPLICATION) }
-        .map_err(RivetError::from)?;
+    // SAFETY: LoadIconW / LoadCursorW with the built-in system resource IDs
+    // always succeed on all supported Windows versions.
+    let icon = unsafe { LoadIconW(None, IDI_APPLICATION) }.map_err(RivetError::from)?;
+    let cursor = unsafe { LoadCursorW(None, IDC_ARROW) }.map_err(RivetError::from)?;
 
-    // SAFETY: LoadCursorW with IDC_ARROW always succeeds; the arrow cursor is
-    // a built-in resource guaranteed to exist on all Windows versions.
-    let cursor = unsafe { LoadCursorW(None, IDC_ARROW) }
-        .map_err(RivetError::from)?;
-
-    // SAFETY: GetStockObject with WHITE_BRUSH always returns a valid HGDIOBJ.
-    // Casting to HBRUSH is correct: stock brush objects are compatible types.
+    // SAFETY: GetStockObject(WHITE_BRUSH) always returns a valid HGDIOBJ.
+    // Reinterpreting it as HBRUSH is correct — stock brush objects are
+    // compatible with HBRUSH throughout the Win32 API.
     let bg_brush = unsafe { HBRUSH(GetStockObject(WHITE_BRUSH).0) };
 
     let wndclass = WNDCLASSEXW {
-        // WNDCLASSEXW is ~72 bytes; the cast to u32 is always lossless.
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        // CS_HREDRAW | CS_VREDRAW: repaint on resize.
-        // Phase 2b may remove these once Scintilla fills the client area.
-        style: CS_HREDRAW | CS_VREDRAW,
+        // No CS_HREDRAW | CS_VREDRAW: Scintilla and the status bar fill the
+        // entire client area, so a full-window repaint on resize causes flicker.
+        style: WNDCLASS_STYLES(0),
         lpfnWndProc: Some(wnd_proc),
         cbClsExtra: 0,
         cbWndExtra: 0,
@@ -154,25 +168,21 @@ fn register_class(hinstance: HINSTANCE) -> Result<()> {
     };
 
     // SAFETY: wndclass is fully initialised with valid handles;
-    // CLASS_NAME is a valid null-terminated UTF-16 string literal.
+    // CLASS_NAME is a static null-terminated UTF-16 literal.
     let atom = unsafe { RegisterClassExW(&wndclass) };
     if atom == 0 {
         return Err(last_error("RegisterClassExW"));
     }
-
     Ok(())
 }
 
-// ── Window creation ───────────────────────────────────────────────────────────
-
 fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
-    // SAFETY: CLASS_NAME was just registered; hinstance is the exe's module.
-    // HWND::default() (null parent) creates a top-level window.
-    // HMENU::default() (null menu) — we attach the menu separately below.
-    // None for lpParam: no creation data needed at this stage.
+    // SAFETY: CLASS_NAME was registered above; hinstance is the exe's module.
+    // HWND/HMENU::default() are null — correct for a top-level window with no
+    // pre-attached menu (menu is attached separately via SetMenu below).
     let hwnd = unsafe {
         CreateWindowExW(
-            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+            WINDOW_EX_STYLE(0),
             CLASS_NAME,
             APP_TITLE,
             WS_OVERLAPPEDWINDOW,
@@ -191,45 +201,130 @@ fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
         return Err(last_error("CreateWindowExW"));
     }
 
-    // Build and attach the menu bar.
     let menu = build_menu()?;
-    // SAFETY: hwnd and menu are valid handles.
+    // SAFETY: hwnd and menu are valid handles just created above.
     unsafe { SetMenu(hwnd, menu) }.map_err(RivetError::from)?;
 
     Ok(hwnd)
 }
 
-// ── Menu construction ─────────────────────────────────────────────────────────
+// ── Child-control creation ────────────────────────────────────────────────────
+
+/// Create the Scintilla editor and status-bar children.
+///
+/// Called from WM_CREATE.  On failure the caller returns `LRESULT(-1)` to
+/// abort window creation, which causes `CreateWindowExW` to return null.
+fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<WindowState> {
+    // ── Scintilla ─────────────────────────────────────────────────────────────
+    let sci = ScintillaView::create(hwnd_parent, hinstance)?;
+
+    // ── Status bar ────────────────────────────────────────────────────────────
+    // `SBARS_SIZEGRIP` adds the resize grip at the bottom-right corner.
+    // Initial position/size (0,0,0,0) — WM_SIZE will position it correctly.
+    // SAFETY: STATUS_CLASS is a valid null-terminated class name (common
+    // controls are registered by the OS).  hwnd_parent and hinstance are valid.
+    let hwnd_status = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            STATUS_CLASS,
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(SBARS_SIZEGRIP),
+            0,
+            0,
+            0,
+            0,
+            hwnd_parent,
+            HMENU::default(),
+            hinstance,
+            None,
+        )
+    };
+
+    if hwnd_status == HWND::default() {
+        return Err(last_error("CreateWindowExW (status bar)"));
+    }
+
+    // Set an initial placeholder text ("UTF-8 LF Ln 1, Col 1").
+    // Phase 3 will drive this from real document state.
+    let init_text: Vec<u16> = "UTF-8  LF  Ln 1, Col 1"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // SAFETY: hwnd_status is a valid status-bar window; SB_SETTEXT (0x0401)
+    // with part-index 0 and a valid PCWSTR in LPARAM is documented behaviour.
+    unsafe {
+        let _ = SendMessageW(
+            hwnd_status,
+            SB_SETTEXT,
+            WPARAM(0),
+            LPARAM(init_text.as_ptr() as isize),
+        );
+    }
+
+    Ok(WindowState { sci, hwnd_status })
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+
+/// Resize Scintilla and the status bar to fill the new client area.
+///
+/// # Safety
+/// `state` must point to a live `WindowState` whose child HWNDs are valid
+/// (i.e., between WM_CREATE and WM_DESTROY on the parent window).
+unsafe fn layout_children(state: &WindowState, client_width: i32, client_height: i32) {
+    // Notify the status bar of the new parent size; it repositions itself.
+    // SAFETY: hwnd_status is a valid child window.
+    let _ = SendMessageW(state.hwnd_status, WM_SIZE, WPARAM(0), LPARAM(0));
+
+    // Measure the status bar's height after it has repositioned.
+    let mut sr = RECT::default();
+    // SAFETY: hwnd_status is valid; sr is a valid mutable RECT.
+    let _ = GetClientRect(state.hwnd_status, &mut sr);
+    let status_h = sr.bottom; // sr.top is always 0 for a client rect
+
+    // Resize Scintilla to fill the remaining area above the status bar.
+    // SAFETY: sci.hwnd() is the Scintilla child HWND, valid until WM_DESTROY.
+    let _ = SetWindowPos(
+        state.sci.hwnd(),
+        HWND::default(), // hWndInsertAfter ignored when SWP_NOZORDER is set
+        0,
+        0,
+        client_width,
+        (client_height - status_h).max(0),
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+}
+
+// ── Menu ──────────────────────────────────────────────────────────────────────
 
 fn build_menu() -> Result<HMENU> {
-    // SAFETY: CreateMenu has no preconditions; it always succeeds unless the
-    // system is critically low on resources, in which case ? propagates the error.
+    // SAFETY: CreateMenu / AppendMenuW have no preconditions beyond running on
+    // a Win32-enabled thread; they fail only under extreme resource pressure.
     unsafe {
         let bar = CreateMenu().map_err(RivetError::from)?;
 
-        // ── File ──────────────────────────────────────────────────────────────
+        // File
         let file = CreateMenu().map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_EXIT, w!("E&xit\tAlt+F4"))
             .map_err(RivetError::from)?;
 
-        // ── Edit ──────────────────────────────────────────────────────────────
-        // Populated Phase 5; grayed stubs keep the menu non-empty.
+        // Edit  (populated Phase 5)
         let edit = CreateMenu().map_err(RivetError::from)?;
         AppendMenuW(edit, MF_STRING | MF_GRAYED, 0, w!("&Undo\tCtrl+Z"))
             .map_err(RivetError::from)?;
 
-        // ── View ──────────────────────────────────────────────────────────────
+        // View  (populated Phase 8)
         let view = CreateMenu().map_err(RivetError::from)?;
         AppendMenuW(view, MF_STRING | MF_GRAYED, 0, w!("Word &Wrap"))
             .map_err(RivetError::from)?;
 
-        // ── Help ──────────────────────────────────────────────────────────────
+        // Help
         let help = CreateMenu().map_err(RivetError::from)?;
-        AppendMenuW(help, MF_STRING, IDM_HELP_ABOUT, w!("&About Rivet…"))
+        AppendMenuW(help, MF_STRING, IDM_HELP_ABOUT, w!("&About Rivet\u{2026}"))
             .map_err(RivetError::from)?;
 
-        // Attach drop-downs to the menu bar.
-        // The uIDNewItem parameter for MF_POPUP is the child HMENU cast to usize.
+        // Bar
         AppendMenuW(bar, MF_POPUP, file.0 as usize, w!("&File"))
             .map_err(RivetError::from)?;
         AppendMenuW(bar, MF_POPUP, edit.0 as usize, w!("&Edit"))
@@ -247,36 +342,30 @@ fn build_menu() -> Result<HMENU> {
 
 fn message_loop() -> Result<()> {
     let mut msg = MSG::default();
-
     loop {
-        // SAFETY: &mut msg is a valid MSG pointer; HWND::default() retrieves
-        // messages for all windows on this thread; 0,0 filter accepts all.
+        // SAFETY: &mut msg is a valid MSG pointer.  HWND::default() (null)
+        // retrieves messages for all windows on this thread; 0,0 accepts all.
         let ret = unsafe { GetMessage(&mut msg, HWND::default(), 0, 0) };
 
         match ret.0 {
-            // GetMessage returns -1 on error.
             -1 => return Err(last_error("GetMessage")),
-            // Returns 0 when WM_QUIT is retrieved — exit the loop cleanly.
             0 => break,
-            // Any other value: a normal message to dispatch.
             _ => unsafe {
                 // SAFETY: msg was populated by a successful GetMessage call.
-                // TranslateMessage return value (whether it generated WM_CHAR)
-                // and DispatchMessageW's LRESULT are intentionally unused.
+                // Return values (WM_CHAR generated, handler LRESULT) are unused.
                 let _ = TranslateMessage(&msg);
                 let _ = DispatchMessageW(&msg);
             },
         }
     }
-
     Ok(())
 }
 
 // ── Window procedure ──────────────────────────────────────────────────────────
 
-// SAFETY: wnd_proc is registered as lpfnWndProc in WNDCLASSEXW.
-// Windows guarantees that hwnd, msg, wparam, and lparam are valid for the
-// lifetime of this call; we must not store hwnd beyond the message handler.
+// SAFETY: registered as `lpfnWndProc` in WNDCLASSEXW.  Windows guarantees
+// that hwnd, msg, wparam, and lparam are valid for the duration of the call.
+// We must not store hwnd beyond this handler's stack frame.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -284,66 +373,97 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        // ── Lifecycle ─────────────────────────────────────────────────────────
+        // ── Startup ───────────────────────────────────────────────────────────
         WM_CREATE => {
-            // Phase 2b: load SciLexer.dll, create Scintilla child window and
-            // status bar here.
+            // Retrieve HINSTANCE from the running exe so child windows share it.
+            // SAFETY: GetModuleHandleW(None) always succeeds for a loaded exe.
+            let hmodule = match GetModuleHandleW(None) {
+                Ok(h) => h,
+                Err(_) => return LRESULT(-1), // abort window creation
+            };
+            let hinstance = HINSTANCE(hmodule.0);
+
+            match create_child_controls(hwnd, hinstance) {
+                Ok(state) => {
+                    let ptr = Box::into_raw(Box::new(state));
+                    // SAFETY: ptr is a valid, aligned heap pointer; GWLP_USERDATA
+                    // is the standard slot for per-window application data.
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
+                    LRESULT(0)
+                }
+                Err(e) => {
+                    // In debug builds, log the error; in release, stay silent
+                    // (the app will fail visibly since CreateWindowExW returns null).
+                    #[cfg(debug_assertions)]
+                    eprintln!("[rivet] WM_CREATE failed: {e}");
+                    let _ = e; // suppress unused-variable warning in release
+                    LRESULT(-1) // abort window creation
+                }
+            }
+        }
+
+        // ── Layout ────────────────────────────────────────────────────────────
+        WM_SIZE => {
+            // SAFETY: GWLP_USERDATA holds a pointer set in WM_CREATE; null
+            // check guards against any message arriving before WM_CREATE.
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
+            if !ptr.is_null() {
+                let new_w = (lparam.0 & 0xFFFF) as i32;
+                let new_h = ((lparam.0 >> 16) & 0xFFFF) as i32;
+                // SAFETY: ptr is a live Box<WindowState> raw pointer.
+                layout_children(&*ptr, new_w, new_h);
+            }
             LRESULT(0)
         }
 
+        // ── Teardown ──────────────────────────────────────────────────────────
         WM_CLOSE => {
             // SAFETY: hwnd is the window being closed; DestroyWindow triggers
-            // WM_DESTROY, which posts WM_QUIT via PostQuitMessage.
+            // WM_DESTROY which posts WM_QUIT.
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
 
         WM_DESTROY => {
-            // SAFETY: PostQuitMessage with exit code 0 is always safe to call
-            // from WM_DESTROY. It posts WM_QUIT to the thread's message queue.
+            // Retrieve and drop the WindowState, freeing the Scintilla DLL.
+            // SAFETY: GWLP_USERDATA holds the raw pointer from Box::into_raw
+            // in WM_CREATE.  Clear it first to prevent re-entrancy.
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
+            if !ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                // SAFETY: ptr is a live Box<WindowState>; this is the only place
+                // it is reconstructed, and WM_DESTROY fires exactly once.
+                drop(Box::from_raw(ptr));
+            }
+            // SAFETY: PostQuitMessage is always safe to call from WM_DESTROY.
             PostQuitMessage(0);
-            LRESULT(0)
-        }
-
-        // ── Layout ────────────────────────────────────────────────────────────
-        WM_SIZE => {
-            // Phase 2b: resize Scintilla and status bar to fill the client area.
-            // lparam low word = new client width, high word = new client height.
-            let _new_width = lparam.0 & 0xFFFF;
-            let _new_height = (lparam.0 >> 16) & 0xFFFF;
             LRESULT(0)
         }
 
         // ── Commands ──────────────────────────────────────────────────────────
         WM_COMMAND => {
-            // Low word of WPARAM is the command identifier.
-            let cmd_id = wparam.0 & 0xFFFF;
-
-            match cmd_id {
+            let cmd = wparam.0 & 0xFFFF;
+            match cmd {
                 IDM_FILE_EXIT => {
-                    // SAFETY: same as WM_CLOSE handler.
+                    // SAFETY: see WM_CLOSE.
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
                 }
-
                 IDM_HELP_ABOUT => {
                     about_dialog(hwnd);
                     LRESULT(0)
                 }
-
                 _ => DefWindowProcW(hwnd, msg, wparam, lparam),
             }
         }
 
-        // Default processing for all unhandled messages.
-        // SAFETY: hwnd and message parameters are valid — provided by Windows.
+        // SAFETY: hwnd and all message args are valid — provided by Windows.
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
 // ── Helper dialogs ────────────────────────────────────────────────────────────
 
-/// Display the "About Rivet" information dialog.
 fn about_dialog(hwnd: HWND) {
     let body = concat!(
         "Rivet 0.1.0\n\n",
@@ -353,9 +473,8 @@ fn about_dialog(hwnd: HWND) {
     let body_wide: Vec<u16> = body.encode_utf16().chain(std::iter::once(0)).collect();
 
     // SAFETY: body_wide is a valid null-terminated UTF-16 string that remains
-    // allocated for the duration of the MessageBoxW call.
-    // hwnd is the owner window from WndProc — valid for this call.
-    // Return value (button pressed) is intentionally unused for an informational dialog.
+    // allocated for the duration of the call.  hwnd is valid (from WndProc).
+    // Return value (button pressed) is intentionally unused.
     unsafe {
         let _ = MessageBoxW(hwnd, PCWSTR(body_wide.as_ptr()), w!("About Rivet"), MB_OK);
     }
@@ -363,13 +482,13 @@ fn about_dialog(hwnd: HWND) {
 
 // ── Error helpers ─────────────────────────────────────────────────────────────
 
-/// Capture the current Win32 last-error code and wrap it in a `RivetError`.
+/// Read the current Win32 last-error code.
 ///
-/// Call immediately after a Win32 function that signals failure — `GetLastError`
-/// reads thread-local state that can be overwritten by any subsequent API call.
+/// **Must** be called immediately after a failing Win32 function — the
+/// thread-local error state is overwritten by any subsequent API call.
 fn last_error(function: &'static str) -> RivetError {
-    // SAFETY: GetLastError reads thread-local state set by the last Win32 call.
-    // It is always safe to call and never fails.
+    // SAFETY: GetLastError reads thread-local state; it is always safe and
+    // never fails.
     let code = unsafe { GetLastError() };
     RivetError::Win32 {
         function,

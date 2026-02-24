@@ -29,7 +29,8 @@ use windows::{
             SetMenu, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
             TranslateAcceleratorW, TranslateMessage, UpdateWindow, ACCEL, ACCEL_VIRT_FLAGS,
             CW_USEDEFAULT, FCONTROL, FVIRTKEY, GWLP_USERDATA, HACCEL, IDC_ARROW, IDI_APPLICATION,
-            IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNOCANCEL, MF_GRAYED,
+            IDNO, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MB_YESNOCANCEL,
+            MF_GRAYED,
             MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SW_SHOW,
             SWP_NOACTIVATE, SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASS_STYLES,
             WNDCLASSEXW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NOTIFY, WM_SIZE,
@@ -64,6 +65,7 @@ const IDM_FILE_NEW: usize = 1000;
 const IDM_FILE_OPEN: usize = 1001;
 const IDM_FILE_SAVE: usize = 1002;
 const IDM_FILE_SAVE_AS: usize = 1003;
+const IDM_FILE_CLOSE: usize = 1004;
 const IDM_FILE_EXIT: usize = 1099;
 const IDM_HELP_ABOUT: usize = 9001;
 
@@ -472,6 +474,10 @@ fn build_menu() -> Result<HMENU> {
             .map_err(RivetError::from)?;
         AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null())
             .map_err(RivetError::from)?;
+        AppendMenuW(file, MF_STRING, IDM_FILE_CLOSE, w!("&Close Tab\tCtrl+W"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null())
+            .map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_EXIT, w!("E&xit\tAlt+F4"))
             .map_err(RivetError::from)?;
 
@@ -505,9 +511,10 @@ fn build_menu() -> Result<HMENU> {
 fn create_accelerators() -> Result<HACCEL> {
     let ctrl_virt: ACCEL_VIRT_FLAGS = FCONTROL | FVIRTKEY;
     let accels = [
-        ACCEL { fVirt: ctrl_virt, key: b'N' as u16, cmd: IDM_FILE_NEW  as u16 },
-        ACCEL { fVirt: ctrl_virt, key: b'O' as u16, cmd: IDM_FILE_OPEN as u16 },
-        ACCEL { fVirt: ctrl_virt, key: b'S' as u16, cmd: IDM_FILE_SAVE as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'N' as u16, cmd: IDM_FILE_NEW   as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'O' as u16, cmd: IDM_FILE_OPEN  as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'S' as u16, cmd: IDM_FILE_SAVE  as u16 },
+        ACCEL { fVirt: ctrl_virt, key: b'W' as u16, cmd: IDM_FILE_CLOSE as u16 },
     ];
 
     // SAFETY: accels is a valid, non-empty slice of ACCEL entries.
@@ -583,11 +590,20 @@ unsafe extern "system" fn wnd_proc(
         WM_CLOSE => {
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             if !ptr.is_null() {
-                if (*ptr).app.active_doc().dirty && !confirm_discard(hwnd) {
+                // Collect the display names of every dirty tab.
+                let dirty: Vec<String> = (*ptr)
+                    .app
+                    .tabs
+                    .iter()
+                    .filter(|doc| doc.dirty)
+                    .map(|doc| doc.display_name())
+                    .collect();
+
+                if !dirty.is_empty() && !confirm_discard_all(hwnd, &dirty) {
                     return LRESULT(0);
                 }
-                // Save session while all Scintilla views are still alive so
-                // caret / scroll positions can be queried correctly.
+
+                // Save session while all Scintilla views are still alive.
                 save_session(&*ptr);
             }
             let _ = DestroyWindow(hwnd);
@@ -624,6 +640,13 @@ unsafe extern "system" fn wnd_proc(
                 }
                 IDM_FILE_SAVE_AS => {
                     if !ptr.is_null() { handle_file_save(hwnd, &mut *ptr, true); }
+                    LRESULT(0)
+                }
+                IDM_FILE_CLOSE => {
+                    if !ptr.is_null() {
+                        let idx = (*ptr).app.active_idx;
+                        handle_close_tab(hwnd, &mut *ptr, idx);
+                    }
                     LRESULT(0)
                 }
                 IDM_FILE_EXIT => {
@@ -972,21 +995,149 @@ unsafe fn update_window_title(hwnd: HWND, app: &App) {
 
 // ── Helper dialogs ────────────────────────────────────────────────────────────
 
-/// Ask the user what to do with unsaved changes.
+// ── Close tab ─────────────────────────────────────────────────────────────────
+
+/// Close the tab at `idx`, prompting about unsaved changes if needed.
 ///
-/// Returns `true` if the close should proceed (user chose "Discard"),
-/// `false` if the user cancelled.
+/// If `idx` is the last remaining tab the editor content is cleared and the
+/// tab is reset to an untitled document instead of being removed (so there is
+/// always at least one tab).
+///
+/// # Safety
+/// Called only from WM_COMMAND / accelerator on the UI thread.
+unsafe fn handle_close_tab(hwnd: HWND, state: &mut WindowState, idx: usize) {
+    // ── Dirty check ───────────────────────────────────────────────────────────
+    if state.app.tabs[idx].dirty {
+        let name = state.app.tabs[idx].display_name();
+        let msg  = format!("\"{name}\" has unsaved changes.\n\nSave before closing?");
+        let wide: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: wide is valid null-terminated UTF-16 that outlives the call.
+        let result = MessageBoxW(
+            hwnd,
+            PCWSTR(wide.as_ptr()),
+            w!("Rivet"),
+            MB_YESNOCANCEL | MB_ICONWARNING,
+        );
+        match result {
+            r if r == IDYES => {
+                // Try to save; if it fails or the user cancels the dialog, abort.
+                if !save_tab_for_close(hwnd, state, idx) { return; }
+            }
+            r if r == IDNO => { /* discard — fall through to close */ }
+            _              => return, // Cancel
+        }
+    }
+
+    // ── Last tab: reset to untitled instead of removing ───────────────────────
+    if state.app.tab_count() == 1 {
+        let doc = &mut state.app.tabs[0];
+        doc.path       = None;
+        doc.dirty      = false;
+        doc.large_file = false;
+        doc.encoding   = crate::app::Encoding::Utf8;
+        doc.eol        = crate::app::EolMode::Crlf;
+        state.sci_views[0].set_eol_mode(crate::app::EolMode::Crlf);
+        state.sci_views[0].set_text(b"");
+        state.sci_views[0].set_save_point();
+        sync_tab_label(state, 0);
+        update_window_title(hwnd, &state.app);
+        update_status_bar(state);
+        return;
+    }
+
+    // ── Remove the tab ────────────────────────────────────────────────────────
+    let was_active = idx == state.app.active_idx;
+
+    // Explicitly destroy the child HWND (parent window is still alive).
+    state.sci_views[idx].destroy();
+    state.sci_views.remove(idx);
+
+    // Remove the tab strip entry.
+    let _ = SendMessageW(state.hwnd_tab, TCM_DELETEITEM, WPARAM(idx), LPARAM(0));
+
+    // Update App state; remove_tab returns the new active_idx.
+    let new_active = state.app.remove_tab(idx);
+
+    // Sync the tab strip selection.
+    let _ = SendMessageW(state.hwnd_tab, TCM_SETCURSEL, WPARAM(new_active), LPARAM(0));
+
+    // If we closed the active tab, make the new active view visible.
+    if was_active {
+        state.sci_views[new_active].show(true);
+    }
+
+    // Resize the (possibly newly visible) active view.
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+    layout_children(state, rc.right, rc.bottom);
+
+    update_window_title(hwnd, &state.app);
+    update_status_bar(state);
+}
+
+/// Save the tab at `idx` in preparation for closing it.
+///
+/// If the tab has no path a Save-As dialog is shown.  Returns `true` if the
+/// save succeeded and the close should proceed; `false` if the save failed or
+/// the user cancelled the dialog.
+///
+/// Uses `App::save` by temporarily pointing `active_idx` at `idx`.  The caller
+/// closes the tab immediately on success, so the temporary change is benign.
+///
+/// # Safety
+/// Called only from `handle_close_tab` on the UI thread with a valid `state`.
+unsafe fn save_tab_for_close(hwnd: HWND, state: &mut WindowState, idx: usize) -> bool {
+    let path = if let Some(p) = state.app.tabs[idx].path.clone() {
+        p
+    } else {
+        match show_save_dialog(hwnd, "") {
+            Some(p) => p,
+            None    => return false, // user cancelled the dialog
+        }
+    };
+
+    let utf8 = state.sci_views[idx].get_text();
+
+    // Redirect App::save to the correct document by temporarily adjusting
+    // active_idx; restore it on failure so the visible state is consistent.
+    let prev_active = state.app.active_idx;
+    state.app.active_idx = idx;
+
+    match state.app.save(path, &utf8) {
+        Ok(()) => {
+            state.sci_views[idx].set_save_point();
+            sync_tab_label(state, idx);
+            // Leave active_idx at idx — handle_close_tab removes it next.
+            true
+        }
+        Err(e) => {
+            state.app.active_idx = prev_active;
+            show_error_dialog(&format!("Could not save file:\n{e}"));
+            false
+        }
+    }
+}
+
+/// Combined exit guard: show a single dialog listing every dirty tab.
+///
+/// Returns `true` if the user chose to discard all changes and exit.
 ///
 /// # Safety
 /// `hwnd` must be a valid window handle.
-unsafe fn confirm_discard(hwnd: HWND) -> bool {
-    let text = "This document has unsaved changes.\n\nDo you want to discard them and close?";
+unsafe fn confirm_discard_all(hwnd: HWND, names: &[String]) -> bool {
+    let mut text = String::from("The following files have unsaved changes:\n");
+    for name in names {
+        text.push_str(&format!("  \u{2022} {name}\n"));
+    }
+    text.push_str("\nDiscard all and exit?");
+
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    // MB_YESNO: "Yes" = discard and exit, "No" = stay open.
     let result = MessageBoxW(
         hwnd,
         PCWSTR(wide.as_ptr()),
         w!("Rivet"),
-        MB_YESNOCANCEL | MB_ICONWARNING,
+        MB_YESNO | MB_ICONWARNING,
     );
     result == IDYES
 }

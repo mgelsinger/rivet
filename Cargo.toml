@@ -27,6 +27,13 @@ features = [
     "Win32_UI_WindowsAndMessaging",# CreateWindowExW, RegisterClassExW, MSG, …
 ]
 
+[dependencies.serde]
+version  = "1"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1"
+
 # ── Release profile ──────────────────────────────────────────────────────────
 [profile.release]
 opt-level = 3

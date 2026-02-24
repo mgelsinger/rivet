@@ -187,6 +187,16 @@ pub(crate) fn run() -> Result<()> {
         t0.elapsed().as_secs_f64() * 1000.0
     );
 
+    // Restore the previous session.
+    // SAFETY: WM_CREATE (fired synchronously inside create_window) already
+    // stored the Box<WindowState> in GWLP_USERDATA before we reach this point.
+    unsafe {
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
+        if !ptr.is_null() {
+            restore_session(hwnd, &mut *ptr);
+        }
+    }
+
     message_loop(hwnd, haccel)
 }
 
@@ -572,10 +582,13 @@ unsafe extern "system" fn wnd_proc(
         // ── Teardown ──────────────────────────────────────────────────────────
         WM_CLOSE => {
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
-            if !ptr.is_null() && (*ptr).app.active_doc().dirty {
-                if !confirm_discard(hwnd) {
+            if !ptr.is_null() {
+                if (*ptr).app.active_doc().dirty && !confirm_discard(hwnd) {
                     return LRESULT(0);
                 }
+                // Save session while all Scintilla views are still alive so
+                // caret / scroll positions can be queried correctly.
+                save_session(&*ptr);
             }
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
@@ -988,6 +1001,92 @@ fn about_dialog(hwnd: HWND) {
     unsafe {
         let _ = MessageBoxW(hwnd, PCWSTR(body_wide.as_ptr()), w!("About Rivet"), MB_OK);
     }
+}
+
+// ── Session ───────────────────────────────────────────────────────────────────
+
+/// Serialize the current session to `%APPDATA%\Rivet\session.json`.
+///
+/// Must be called while all Scintilla child windows are still alive (i.e.
+/// from `WM_CLOSE`, before `DestroyWindow`).  Errors are silently discarded.
+fn save_session(state: &WindowState) {
+    let entries: Vec<crate::session::TabEntry> = state
+        .app
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(i, doc)| crate::session::TabEntry {
+            path:        doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            caret_pos:   state.sci_views[i].caret_pos(),
+            scroll_line: state.sci_views[i].first_visible_line(),
+            encoding:    doc.encoding.as_str().to_owned(),
+            eol:         doc.eol.as_str().to_owned(),
+        })
+        .collect();
+
+    let _ = crate::session::save(&entries, state.app.active_idx);
+}
+
+/// Re-open the tabs recorded in the session file.
+///
+/// Called once from `run()` after the main window is visible.  Entries without
+/// a path (untitled buffers) and entries whose file no longer exists on disk
+/// are silently skipped.  On any error the function returns early, leaving the
+/// initial untitled tab intact.
+///
+/// # Safety
+/// `hwnd` must be the valid main-window handle; `state` must point to a live
+/// `WindowState`.
+unsafe fn restore_session(hwnd: HWND, state: &mut WindowState) {
+    let Some(sf) = crate::session::load() else { return; };
+
+    let mut opened_any = false;
+
+    for entry in &sf.tabs {
+        let Some(path_str) = &entry.path else { continue; };
+        let path = std::path::PathBuf::from(path_str);
+        if !path.exists() { continue; }
+
+        let bytes = match std::fs::read(&path) {
+            Ok(b)  => b,
+            Err(_) => continue,
+        };
+
+        if !opened_any {
+            // Reuse the initial untitled tab for the first restored file.
+            load_file_into_active_tab(hwnd, state, path, &bytes);
+        } else {
+            open_file_in_new_tab(hwnd, state, path, &bytes);
+        }
+
+        // Restore caret and scroll.  SCI_GOTOPOS clamps to document length
+        // if the position is beyond the end of file, so no bounds check needed.
+        let idx = state.app.active_idx;
+        state.sci_views[idx].set_caret_pos(entry.caret_pos);
+        state.sci_views[idx].set_first_visible_line(entry.scroll_line);
+
+        opened_any = true;
+    }
+
+    if !opened_any { return; }
+
+    // Restore the active tab (clamped to the number of tabs we actually opened).
+    let target = sf.active_tab.min(state.app.tab_count() - 1);
+    if target != state.app.active_idx {
+        state.sci_views[state.app.active_idx].show(false);
+        state.app.active_idx = target;
+        state.sci_views[target].show(true);
+        let _ = SendMessageW(state.hwnd_tab, TCM_SETCURSEL, WPARAM(target), LPARAM(0));
+        let eol = state.sci_views[target].eol_mode();
+        state.app.active_doc_mut().eol = eol;
+
+        let mut rc = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc);
+        layout_children(state, rc.right, rc.bottom);
+    }
+
+    update_window_title(hwnd, &state.app);
+    update_status_bar(state);
 }
 
 // ── Error helpers ─────────────────────────────────────────────────────────────

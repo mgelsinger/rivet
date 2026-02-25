@@ -29,18 +29,17 @@ use windows::{
                 AppendMenuW, CheckMenuItem, CreateAcceleratorTableW, CreateMenu, CreateWindowExW,
                 DefWindowProcW, DestroyWindow, DialogBoxIndirectParamW, DispatchMessageW,
                 EndDialog, GetClientRect, GetDlgItem, GetDlgItemTextW, GetMenu, GetMessage,
-                GetWindowLongPtrW, IsDialogMessageW, LoadCursorW, LoadIconW, MessageBeep,
-                MessageBoxW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
-                SendMessageW, SetDlgItemTextW, SetForegroundWindow, SetMenu, SetWindowLongPtrW,
-                SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage,
-                UpdateWindow, ACCEL, ACCEL_VIRT_FLAGS, CW_USEDEFAULT, DLGTEMPLATE,
-                FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDC_ARROW,
-                IDI_APPLICATION, IDNO, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO,
-                MB_YESNOCANCEL, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-                MF_UNCHECKED, MSG, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, WINDOW_EX_STYLE,
-                KillTimer, SetTimer,
-                WINDOW_STYLE, WNDCLASS_STYLES, WNDCLASSEXW, WM_CLOSE, WM_COMMAND, WM_CREATE,
-                WM_DESTROY, WM_INITDIALOG, WM_NOTIFY, WM_SIZE, WM_TIMER,
+                GetWindowLongPtrW, IsDialogMessageW, KillTimer, LoadCursorW, LoadIconW,
+                MessageBeep, MessageBoxW, PostQuitMessage, RegisterClassExW,
+                RegisterWindowMessageW, SendMessageW, SetDlgItemTextW, SetForegroundWindow,
+                SetMenu, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+                TranslateAcceleratorW, TranslateMessage, UpdateWindow, ACCEL, ACCEL_VIRT_FLAGS,
+                CW_USEDEFAULT, DLGTEMPLATE, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
+                HMENU, IDC_ARROW, IDI_APPLICATION, IDNO, IDYES, MB_ICONERROR, MB_ICONWARNING,
+                MB_OK, MB_YESNO, MB_YESNOCANCEL, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR,
+                MF_STRING, MF_UNCHECKED, MSG, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOW,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
+                WM_INITDIALOG, WM_NOTIFY, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES,
                 WS_CHILD, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
@@ -50,7 +49,10 @@ use windows::{
 use crate::{
     app::{App, EolMode},
     editor::scintilla::{
-        messages::{SCFIND_MATCHCASE, SCFIND_WHOLEWORD, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI},
+        messages::{
+            SCFIND_MATCHCASE, SCFIND_WHOLEWORD, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED,
+            SCN_UPDATEUI,
+        },
         SciDll, ScintillaView,
     },
     error::{Result, RivetError},
@@ -76,23 +78,23 @@ const IDM_FILE_SAVE_AS: usize = 1003;
 const IDM_FILE_CLOSE: usize = 1004;
 const IDM_FILE_EXIT: usize = 1099;
 
-const IDM_EDIT_UNDO:       usize = 2000;
-const IDM_EDIT_REDO:       usize = 2001;
-const IDM_EDIT_CUT:        usize = 2002;
-const IDM_EDIT_COPY:       usize = 2003;
-const IDM_EDIT_PASTE:      usize = 2004;
-const IDM_EDIT_DELETE:     usize = 2005;
+const IDM_EDIT_UNDO: usize = 2000;
+const IDM_EDIT_REDO: usize = 2001;
+const IDM_EDIT_CUT: usize = 2002;
+const IDM_EDIT_COPY: usize = 2003;
+const IDM_EDIT_PASTE: usize = 2004;
+const IDM_EDIT_DELETE: usize = 2005;
 const IDM_EDIT_SELECT_ALL: usize = 2006;
 
 const IDM_FORMAT_EOL_CRLF: usize = 3000;
-const IDM_FORMAT_EOL_LF:   usize = 3001;
-const IDM_FORMAT_EOL_CR:   usize = 3002;
+const IDM_FORMAT_EOL_LF: usize = 3001;
+const IDM_FORMAT_EOL_CR: usize = 3002;
 
-const IDM_VIEW_WORD_WRAP:  usize = 4000;
-const IDM_VIEW_DARK_MODE:  usize = 4001;
+const IDM_VIEW_WORD_WRAP: usize = 4000;
+const IDM_VIEW_DARK_MODE: usize = 4001;
 
-const IDM_SEARCH_FIND:      usize = 5000;
-const IDM_SEARCH_REPLACE:   usize = 5001;
+const IDM_SEARCH_FIND: usize = 5000;
+const IDM_SEARCH_REPLACE: usize = 5001;
 const IDM_SEARCH_FIND_NEXT: usize = 5002;
 const IDM_SEARCH_FIND_PREV: usize = 5003;
 const IDM_SEARCH_GOTO_LINE: usize = 5004;
@@ -108,11 +110,11 @@ const AUTOSAVE_INTERVAL_MS: u32 = 30_000;
 
 // ── FindReplace dialog flags (from commdlg.h) ─────────────────────────────────
 
-const FR_DOWN:       u32 = 0x0001; // search direction: forward
-const FR_WHOLEWORD:  u32 = 0x0002;
-const FR_MATCHCASE:  u32 = 0x0004;
-const FR_FINDNEXT:   u32 = 0x0008;
-const FR_REPLACE:    u32 = 0x0010;
+const FR_DOWN: u32 = 0x0001; // search direction: forward
+const FR_WHOLEWORD: u32 = 0x0002;
+const FR_MATCHCASE: u32 = 0x0004;
+const FR_FINDNEXT: u32 = 0x0008;
+const FR_REPLACE: u32 = 0x0010;
 const FR_REPLACEALL: u32 = 0x0020;
 const FR_DIALOGTERM: u32 = 0x0040;
 
@@ -142,11 +144,11 @@ const DWMWA_DARK_MODE: i32 = 20;
 
 // Tab-control messages (from commctrl.h; windows crate 0.58 doesn't export them).
 const TCM_FIRST: u32 = 0x1300;
-const TCM_INSERTITEMW: u32 = TCM_FIRST + 7;  // 0x1307
-const TCM_DELETEITEM: u32 = TCM_FIRST + 8;   // 0x1308  (used in Phase 4d)
-const TCM_GETCURSEL: u32 = TCM_FIRST + 11;   // 0x130B
-const TCM_SETCURSEL: u32 = TCM_FIRST + 12;   // 0x130C
-const TCM_SETITEMW: u32 = TCM_FIRST + 61;    // 0x133D
+const TCM_INSERTITEMW: u32 = TCM_FIRST + 7; // 0x1307
+const TCM_DELETEITEM: u32 = TCM_FIRST + 8; // 0x1308  (used in Phase 4d)
+const TCM_GETCURSEL: u32 = TCM_FIRST + 11; // 0x130B
+const TCM_SETCURSEL: u32 = TCM_FIRST + 12; // 0x130C
+const TCM_SETITEMW: u32 = TCM_FIRST + 61; // 0x133D
 
 // Tab-control notifications.
 const TCN_SELCHANGE: u32 = 0xFFFF_FDD9; // (-551i32 as u32)
@@ -160,13 +162,13 @@ const TCIF_TEXT: u32 = 0x0001;
 /// expects.  The fields follow the C declaration order exactly.
 #[repr(C)]
 struct TCITEMW {
-    mask:          u32,
-    dw_state:      u32,
+    mask: u32,
+    dw_state: u32,
     dw_state_mask: u32,
-    psz_text:      *mut u16,
-    cch_text_max:  i32,
-    i_image:       i32,
-    l_param:       isize,
+    psz_text: *mut u16,
+    cch_text_max: i32,
+    i_image: i32,
+    l_param: isize,
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
@@ -318,30 +320,32 @@ pub(crate) fn show_error_dialog(message: &str) {
 // ── Window class + creation ───────────────────────────────────────────────────
 
 fn register_class(hinstance: HINSTANCE) -> Result<()> {
-    let icon   = unsafe { LoadIconW(None, IDI_APPLICATION) }.map_err(RivetError::from)?;
+    let icon = unsafe { LoadIconW(None, IDI_APPLICATION) }.map_err(RivetError::from)?;
     let cursor = unsafe { LoadCursorW(None, IDC_ARROW) }.map_err(RivetError::from)?;
 
     // SAFETY: GetStockObject(WHITE_BRUSH) always returns a valid HGDIOBJ.
     let bg_brush = unsafe { HBRUSH(GetStockObject(WHITE_BRUSH).0) };
 
     let wndclass = WNDCLASSEXW {
-        cbSize:        std::mem::size_of::<WNDCLASSEXW>() as u32,
-        style:         WNDCLASS_STYLES(0),
-        lpfnWndProc:   Some(wnd_proc),
-        cbClsExtra:    0,
-        cbWndExtra:    0,
-        hInstance:     hinstance,
-        hIcon:         icon,
-        hCursor:       cursor,
+        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+        style: WNDCLASS_STYLES(0),
+        lpfnWndProc: Some(wnd_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: hinstance,
+        hIcon: icon,
+        hCursor: cursor,
         hbrBackground: bg_brush,
-        lpszMenuName:  PCWSTR::null(),
+        lpszMenuName: PCWSTR::null(),
         lpszClassName: CLASS_NAME,
-        hIconSm:       icon,
+        hIconSm: icon,
     };
 
     // SAFETY: wndclass is fully initialised with valid handles.
     let atom = unsafe { RegisterClassExW(&wndclass) };
-    if atom == 0 { return Err(last_error("RegisterClassExW")); }
+    if atom == 0 {
+        return Err(last_error("RegisterClassExW"));
+    }
     Ok(())
 }
 
@@ -349,8 +353,8 @@ fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
     // Scale the initial window size to the primary monitor's DPI so the window
     // appears at a consistent logical size on high-DPI displays.
     let sys_dpi = crate::platform::win32::dpi::get_system_dpi();
-    let init_w   = crate::platform::win32::dpi::scale(DEFAULT_WIDTH,  sys_dpi);
-    let init_h   = crate::platform::win32::dpi::scale(DEFAULT_HEIGHT, sys_dpi);
+    let init_w = crate::platform::win32::dpi::scale(DEFAULT_WIDTH, sys_dpi);
+    let init_h = crate::platform::win32::dpi::scale(DEFAULT_HEIGHT, sys_dpi);
 
     let hwnd = unsafe {
         CreateWindowExW(
@@ -358,8 +362,10 @@ fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
             CLASS_NAME,
             APP_TITLE,
             WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT, CW_USEDEFAULT,
-            init_w, init_h,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            init_w,
+            init_h,
             HWND::default(),
             HMENU::default(),
             hinstance,
@@ -367,7 +373,9 @@ fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
         )
     };
 
-    if hwnd == HWND::default() { return Err(last_error("CreateWindowExW")); }
+    if hwnd == HWND::default() {
+        return Err(last_error("CreateWindowExW"));
+    }
 
     let menu = build_menu()?;
     // SAFETY: hwnd and menu are valid handles.
@@ -395,7 +403,10 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
             TAB_CLASS,
             PCWSTR::null(),
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-            0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
             hwnd_parent,
             HMENU::default(),
             hinstance,
@@ -419,7 +430,10 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
             STATUS_CLASS,
             PCWSTR::null(),
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(SBARS_SIZEGRIP),
-            0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
             hwnd_parent,
             HMENU::default(),
             hinstance,
@@ -457,26 +471,32 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
     // The buffers are heap-allocated so their addresses are stable even after
     // WindowState is moved into Box::into_raw.  We capture the raw pointers
     // before moving ownership into the struct.
-    let find_buf    = Box::new([0u16; 512]);
+    let find_buf = Box::new([0u16; 512]);
     let replace_buf = Box::new([0u16; 512]);
-    let find_ptr    = find_buf.as_ptr() as *mut u16;
-    let repl_ptr    = replace_buf.as_ptr() as *mut u16;
+    let find_ptr = find_buf.as_ptr() as *mut u16;
+    let repl_ptr = replace_buf.as_ptr() as *mut u16;
     let findreplace = FINDREPLACEW {
-        lStructSize:      std::mem::size_of::<FINDREPLACEW>() as u32,
-        hwndOwner:        hwnd_parent,
-        lpstrFindWhat:    PWSTR(find_ptr),
-        wFindWhatLen:     512,
+        lStructSize: std::mem::size_of::<FINDREPLACEW>() as u32,
+        hwndOwner: hwnd_parent,
+        lpstrFindWhat: PWSTR(find_ptr),
+        wFindWhatLen: 512,
         lpstrReplaceWith: PWSTR(repl_ptr),
-        wReplaceWithLen:  512,
-        Flags:            FINDREPLACE_FLAGS(FR_DOWN),
+        wReplaceWithLen: 512,
+        Flags: FINDREPLACE_FLAGS(FR_DOWN),
         ..Default::default()
     };
 
     let state = WindowState {
-        app, sci_views, sci_dll, hwnd_tab, hwnd_status,
+        app,
+        sci_views,
+        sci_dll,
+        hwnd_tab,
+        hwnd_status,
         dpi: crate::platform::win32::dpi::BASE_DPI,
         dark_mode: false,
-        find_buf, replace_buf, findreplace,
+        find_buf,
+        replace_buf,
+        findreplace,
         hwnd_find_dlg: HWND::default(),
     };
 
@@ -503,7 +523,10 @@ unsafe fn layout_children(state: &WindowState, client_width: i32, client_height:
     let _ = SetWindowPos(
         state.hwnd_tab,
         HWND::default(),
-        0, 0, client_width, tab_h,
+        0,
+        0,
+        client_width,
+        tab_h,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
 
@@ -519,7 +542,10 @@ unsafe fn layout_children(state: &WindowState, client_width: i32, client_height:
     let _ = SetWindowPos(
         state.sci_views[state.app.active_idx].hwnd(),
         HWND::default(),
-        0, sci_y, client_width, sci_h,
+        0,
+        sci_y,
+        client_width,
+        sci_h,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
 }
@@ -533,13 +559,13 @@ unsafe fn layout_children(state: &WindowState, client_width: i32, client_height:
 unsafe fn tab_insert(hwnd_tab: HWND, idx: usize, label: &str) {
     let mut wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
     let mut item = TCITEMW {
-        mask:          TCIF_TEXT,
-        dw_state:      0,
+        mask: TCIF_TEXT,
+        dw_state: 0,
         dw_state_mask: 0,
-        psz_text:      wide.as_mut_ptr(),
-        cch_text_max:  wide.len() as i32,
-        i_image:       -1,
-        l_param:       0,
+        psz_text: wide.as_mut_ptr(),
+        cch_text_max: wide.len() as i32,
+        i_image: -1,
+        l_param: 0,
     };
     // SAFETY: item is valid for the duration of the SendMessageW call;
     // wide provides the null-terminated UTF-16 text buffer.
@@ -558,13 +584,13 @@ unsafe fn tab_insert(hwnd_tab: HWND, idx: usize, label: &str) {
 unsafe fn tab_set_label(hwnd_tab: HWND, idx: usize, label: &str) {
     let mut wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
     let mut item = TCITEMW {
-        mask:          TCIF_TEXT,
-        dw_state:      0,
+        mask: TCIF_TEXT,
+        dw_state: 0,
         dw_state_mask: 0,
-        psz_text:      wide.as_mut_ptr(),
-        cch_text_max:  wide.len() as i32,
-        i_image:       -1,
-        l_param:       0,
+        psz_text: wide.as_mut_ptr(),
+        cch_text_max: wide.len() as i32,
+        i_image: -1,
+        l_param: 0,
     };
     // SAFETY: see tab_insert.
     let _ = SendMessageW(
@@ -593,22 +619,18 @@ fn build_menu() -> Result<HMENU> {
 
         // ── File ──────────────────────────────────────────────────────────────
         let file = CreateMenu().map_err(RivetError::from)?;
-        AppendMenuW(file, MF_STRING, IDM_FILE_NEW, w!("&New\tCtrl+N"))
-            .map_err(RivetError::from)?;
-        AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null())
-            .map_err(RivetError::from)?;
+        AppendMenuW(file, MF_STRING, IDM_FILE_NEW, w!("&New\tCtrl+N")).map_err(RivetError::from)?;
+        AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_OPEN, w!("&Open\u{2026}\tCtrl+O"))
             .map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_SAVE, w!("&Save\tCtrl+S"))
             .map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_SAVE_AS, w!("Save &As\u{2026}"))
             .map_err(RivetError::from)?;
-        AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null())
-            .map_err(RivetError::from)?;
+        AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_CLOSE, w!("&Close Tab\tCtrl+W"))
             .map_err(RivetError::from)?;
-        AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null())
-            .map_err(RivetError::from)?;
+        AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
         AppendMenuW(file, MF_STRING, IDM_FILE_EXIT, w!("E&xit\tAlt+F4"))
             .map_err(RivetError::from)?;
 
@@ -618,51 +640,90 @@ fn build_menu() -> Result<HMENU> {
             .map_err(RivetError::from)?;
         AppendMenuW(edit, MF_STRING, IDM_EDIT_REDO, w!("&Redo\tCtrl+Y"))
             .map_err(RivetError::from)?;
-        AppendMenuW(edit, MF_SEPARATOR, 0, PCWSTR::null())
-            .map_err(RivetError::from)?;
-        AppendMenuW(edit, MF_STRING, IDM_EDIT_CUT, w!("Cu&t\tCtrl+X"))
-            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_CUT, w!("Cu&t\tCtrl+X")).map_err(RivetError::from)?;
         AppendMenuW(edit, MF_STRING, IDM_EDIT_COPY, w!("&Copy\tCtrl+C"))
             .map_err(RivetError::from)?;
         AppendMenuW(edit, MF_STRING, IDM_EDIT_PASTE, w!("&Paste\tCtrl+V"))
             .map_err(RivetError::from)?;
-        AppendMenuW(edit, MF_STRING, IDM_EDIT_DELETE, w!("&Delete"))
-            .map_err(RivetError::from)?;
-        AppendMenuW(edit, MF_SEPARATOR, 0, PCWSTR::null())
-            .map_err(RivetError::from)?;
-        AppendMenuW(edit, MF_STRING, IDM_EDIT_SELECT_ALL, w!("Select &All\tCtrl+A"))
-            .map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_STRING, IDM_EDIT_DELETE, w!("&Delete")).map_err(RivetError::from)?;
+        AppendMenuW(edit, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
+        AppendMenuW(
+            edit,
+            MF_STRING,
+            IDM_EDIT_SELECT_ALL,
+            w!("Select &All\tCtrl+A"),
+        )
+        .map_err(RivetError::from)?;
 
         // ── Format ────────────────────────────────────────────────────────────
         let format = CreateMenu().map_err(RivetError::from)?;
-        AppendMenuW(format, MF_STRING, IDM_FORMAT_EOL_CRLF,
-            w!("Convert to &Windows (CRLF)")).map_err(RivetError::from)?;
-        AppendMenuW(format, MF_STRING, IDM_FORMAT_EOL_LF,
-            w!("Convert to &Unix (LF)")).map_err(RivetError::from)?;
-        AppendMenuW(format, MF_STRING, IDM_FORMAT_EOL_CR,
-            w!("Convert to &Classic Mac (CR)")).map_err(RivetError::from)?;
+        AppendMenuW(
+            format,
+            MF_STRING,
+            IDM_FORMAT_EOL_CRLF,
+            w!("Convert to &Windows (CRLF)"),
+        )
+        .map_err(RivetError::from)?;
+        AppendMenuW(
+            format,
+            MF_STRING,
+            IDM_FORMAT_EOL_LF,
+            w!("Convert to &Unix (LF)"),
+        )
+        .map_err(RivetError::from)?;
+        AppendMenuW(
+            format,
+            MF_STRING,
+            IDM_FORMAT_EOL_CR,
+            w!("Convert to &Classic Mac (CR)"),
+        )
+        .map_err(RivetError::from)?;
 
         // ── Search ────────────────────────────────────────────────────────────
         let search = CreateMenu().map_err(RivetError::from)?;
-        AppendMenuW(search, MF_STRING, IDM_SEARCH_FIND, w!("&Find\u{2026}\tCtrl+F"))
-            .map_err(RivetError::from)?;
-        AppendMenuW(search, MF_STRING, IDM_SEARCH_REPLACE, w!("&Replace\u{2026}\tCtrl+H"))
-            .map_err(RivetError::from)?;
-        AppendMenuW(search, MF_STRING, IDM_SEARCH_FIND_NEXT, w!("Find &Next\tF3"))
-            .map_err(RivetError::from)?;
-        AppendMenuW(search, MF_STRING, IDM_SEARCH_FIND_PREV, w!("Find &Prev\tShift+F3"))
-            .map_err(RivetError::from)?;
-        AppendMenuW(search, MF_SEPARATOR, 0, PCWSTR::null())
-            .map_err(RivetError::from)?;
-        AppendMenuW(search, MF_STRING, IDM_SEARCH_GOTO_LINE, w!("&Go to Line\u{2026}\tCtrl+G"))
-            .map_err(RivetError::from)?;
+        AppendMenuW(
+            search,
+            MF_STRING,
+            IDM_SEARCH_FIND,
+            w!("&Find\u{2026}\tCtrl+F"),
+        )
+        .map_err(RivetError::from)?;
+        AppendMenuW(
+            search,
+            MF_STRING,
+            IDM_SEARCH_REPLACE,
+            w!("&Replace\u{2026}\tCtrl+H"),
+        )
+        .map_err(RivetError::from)?;
+        AppendMenuW(
+            search,
+            MF_STRING,
+            IDM_SEARCH_FIND_NEXT,
+            w!("Find &Next\tF3"),
+        )
+        .map_err(RivetError::from)?;
+        AppendMenuW(
+            search,
+            MF_STRING,
+            IDM_SEARCH_FIND_PREV,
+            w!("Find &Prev\tShift+F3"),
+        )
+        .map_err(RivetError::from)?;
+        AppendMenuW(search, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
+        AppendMenuW(
+            search,
+            MF_STRING,
+            IDM_SEARCH_GOTO_LINE,
+            w!("&Go to Line\u{2026}\tCtrl+G"),
+        )
+        .map_err(RivetError::from)?;
 
         // ── View ──────────────────────────────────────────────────────────────
         let view = CreateMenu().map_err(RivetError::from)?;
         AppendMenuW(view, MF_STRING, IDM_VIEW_WORD_WRAP, w!("Word &Wrap"))
             .map_err(RivetError::from)?;
-        AppendMenuW(view, MF_SEPARATOR, 0, PCWSTR::null())
-            .map_err(RivetError::from)?;
+        AppendMenuW(view, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
         AppendMenuW(view, MF_STRING, IDM_VIEW_DARK_MODE, w!("&Dark Mode"))
             .map_err(RivetError::from)?;
 
@@ -672,12 +733,12 @@ fn build_menu() -> Result<HMENU> {
             .map_err(RivetError::from)?;
 
         // ── Bar: File | Edit | Format | Search | View | Help ─────────────────
-        AppendMenuW(bar, MF_POPUP, file.0   as usize, w!("&File"))   .map_err(RivetError::from)?;
-        AppendMenuW(bar, MF_POPUP, edit.0   as usize, w!("&Edit"))   .map_err(RivetError::from)?;
-        AppendMenuW(bar, MF_POPUP, format.0 as usize, w!("F&ormat")) .map_err(RivetError::from)?;
-        AppendMenuW(bar, MF_POPUP, search.0 as usize, w!("&Search")) .map_err(RivetError::from)?;
-        AppendMenuW(bar, MF_POPUP, view.0   as usize, w!("&View"))   .map_err(RivetError::from)?;
-        AppendMenuW(bar, MF_POPUP, help.0   as usize, w!("&Help"))   .map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, file.0 as usize, w!("&File")).map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, edit.0 as usize, w!("&Edit")).map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, format.0 as usize, w!("F&ormat")).map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, search.0 as usize, w!("&Search")).map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, view.0 as usize, w!("&View")).map_err(RivetError::from)?;
+        AppendMenuW(bar, MF_POPUP, help.0 as usize, w!("&Help")).map_err(RivetError::from)?;
 
         Ok(bar)
     }
@@ -686,26 +747,86 @@ fn build_menu() -> Result<HMENU> {
 // ── Accelerator table ─────────────────────────────────────────────────────────
 
 fn create_accelerators() -> Result<HACCEL> {
-    let ctrl_virt:  ACCEL_VIRT_FLAGS = FCONTROL | FVIRTKEY;
-    let virt_only:  ACCEL_VIRT_FLAGS = FVIRTKEY;
+    let ctrl_virt: ACCEL_VIRT_FLAGS = FCONTROL | FVIRTKEY;
+    let virt_only: ACCEL_VIRT_FLAGS = FVIRTKEY;
     let shift_virt: ACCEL_VIRT_FLAGS = FVIRTKEY | FSHIFT;
     let accels = [
-        ACCEL { fVirt: ctrl_virt,  key: b'N' as u16, cmd: IDM_FILE_NEW         as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'O' as u16, cmd: IDM_FILE_OPEN        as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'S' as u16, cmd: IDM_FILE_SAVE        as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'W' as u16, cmd: IDM_FILE_CLOSE       as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'Z' as u16, cmd: IDM_EDIT_UNDO        as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'Y' as u16, cmd: IDM_EDIT_REDO        as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'X' as u16, cmd: IDM_EDIT_CUT         as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'C' as u16, cmd: IDM_EDIT_COPY        as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'V' as u16, cmd: IDM_EDIT_PASTE       as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'A' as u16, cmd: IDM_EDIT_SELECT_ALL  as u16 },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'N' as u16,
+            cmd: IDM_FILE_NEW as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'O' as u16,
+            cmd: IDM_FILE_OPEN as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'S' as u16,
+            cmd: IDM_FILE_SAVE as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'W' as u16,
+            cmd: IDM_FILE_CLOSE as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'Z' as u16,
+            cmd: IDM_EDIT_UNDO as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'Y' as u16,
+            cmd: IDM_EDIT_REDO as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'X' as u16,
+            cmd: IDM_EDIT_CUT as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'C' as u16,
+            cmd: IDM_EDIT_COPY as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'V' as u16,
+            cmd: IDM_EDIT_PASTE as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'A' as u16,
+            cmd: IDM_EDIT_SELECT_ALL as u16,
+        },
         // Search
-        ACCEL { fVirt: ctrl_virt,  key: b'F' as u16, cmd: IDM_SEARCH_FIND      as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'H' as u16, cmd: IDM_SEARCH_REPLACE   as u16 },
-        ACCEL { fVirt: ctrl_virt,  key: b'G' as u16, cmd: IDM_SEARCH_GOTO_LINE as u16 },
-        ACCEL { fVirt: virt_only,  key: VK_F3,        cmd: IDM_SEARCH_FIND_NEXT as u16 },
-        ACCEL { fVirt: shift_virt, key: VK_F3,        cmd: IDM_SEARCH_FIND_PREV as u16 },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'F' as u16,
+            cmd: IDM_SEARCH_FIND as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'H' as u16,
+            cmd: IDM_SEARCH_REPLACE as u16,
+        },
+        ACCEL {
+            fVirt: ctrl_virt,
+            key: b'G' as u16,
+            cmd: IDM_SEARCH_GOTO_LINE as u16,
+        },
+        ACCEL {
+            fVirt: virt_only,
+            key: VK_F3,
+            cmd: IDM_SEARCH_FIND_NEXT as u16,
+        },
+        ACCEL {
+            fVirt: shift_virt,
+            key: VK_F3,
+            cmd: IDM_SEARCH_FIND_PREV as u16,
+        },
     ];
 
     // SAFETY: accels is a valid, non-empty slice of ACCEL entries.
@@ -721,12 +842,16 @@ fn message_loop(hwnd: HWND, haccel: HACCEL) -> Result<()> {
         let ret = unsafe { GetMessage(&mut msg, HWND::default(), 0, 0) };
         match ret.0 {
             -1 => return Err(last_error("GetMessage")),
-            0  => break,
-            _  => unsafe {
+            0 => break,
+            _ => unsafe {
                 // Give the modeless Find/Replace dialog first crack at keyboard
                 // messages (Tab, Enter, Escape, arrow keys, etc.).
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowState;
-                let dlg = if !ptr.is_null() { (*ptr).hwnd_find_dlg } else { HWND::default() };
+                let dlg = if !ptr.is_null() {
+                    (*ptr).hwnd_find_dlg
+                } else {
+                    HWND::default()
+                };
                 if dlg != HWND::default() && IsDialogMessageW(dlg, &msg).as_bool() {
                     continue;
                 }
@@ -765,7 +890,7 @@ unsafe extern "system" fn wnd_proc(
         // ── Startup ───────────────────────────────────────────────────────────
         WM_CREATE => {
             let hmodule = match GetModuleHandleW(None) {
-                Ok(h)  => h,
+                Ok(h) => h,
                 Err(_) => return LRESULT(-1),
             };
             let hinstance = HINSTANCE(hmodule.0);
@@ -841,19 +966,27 @@ unsafe extern "system" fn wnd_proc(
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             match cmd {
                 IDM_FILE_NEW => {
-                    if !ptr.is_null() { handle_new_file(hwnd, &mut *ptr); }
+                    if !ptr.is_null() {
+                        handle_new_file(hwnd, &mut *ptr);
+                    }
                     LRESULT(0)
                 }
                 IDM_FILE_OPEN => {
-                    if !ptr.is_null() { handle_file_open(hwnd, &mut *ptr); }
+                    if !ptr.is_null() {
+                        handle_file_open(hwnd, &mut *ptr);
+                    }
                     LRESULT(0)
                 }
                 IDM_FILE_SAVE => {
-                    if !ptr.is_null() { handle_file_save(hwnd, &mut *ptr, false); }
+                    if !ptr.is_null() {
+                        handle_file_save(hwnd, &mut *ptr, false);
+                    }
                     LRESULT(0)
                 }
                 IDM_FILE_SAVE_AS => {
-                    if !ptr.is_null() { handle_file_save(hwnd, &mut *ptr, true); }
+                    if !ptr.is_null() {
+                        handle_file_save(hwnd, &mut *ptr, true);
+                    }
                     LRESULT(0)
                 }
                 IDM_FILE_CLOSE => {
@@ -921,45 +1054,63 @@ unsafe extern "system" fn wnd_proc(
 
                 // ── Format — EOL conversion ───────────────────────────────────
                 IDM_FORMAT_EOL_CRLF => {
-                    if !ptr.is_null() { handle_eol_convert(hwnd, &mut *ptr, EolMode::Crlf); }
+                    if !ptr.is_null() {
+                        handle_eol_convert(hwnd, &mut *ptr, EolMode::Crlf);
+                    }
                     LRESULT(0)
                 }
                 IDM_FORMAT_EOL_LF => {
-                    if !ptr.is_null() { handle_eol_convert(hwnd, &mut *ptr, EolMode::Lf); }
+                    if !ptr.is_null() {
+                        handle_eol_convert(hwnd, &mut *ptr, EolMode::Lf);
+                    }
                     LRESULT(0)
                 }
                 IDM_FORMAT_EOL_CR => {
-                    if !ptr.is_null() { handle_eol_convert(hwnd, &mut *ptr, EolMode::Cr); }
+                    if !ptr.is_null() {
+                        handle_eol_convert(hwnd, &mut *ptr, EolMode::Cr);
+                    }
                     LRESULT(0)
                 }
 
                 // ── View — Word Wrap ──────────────────────────────────────────
                 IDM_VIEW_WORD_WRAP => {
-                    if !ptr.is_null() { handle_word_wrap_toggle(hwnd, &mut *ptr); }
+                    if !ptr.is_null() {
+                        handle_word_wrap_toggle(hwnd, &mut *ptr);
+                    }
                     LRESULT(0)
                 }
 
                 // ── View — Dark Mode ──────────────────────────────────────────
                 IDM_VIEW_DARK_MODE => {
-                    if !ptr.is_null() { handle_dark_mode_toggle(hwnd, &mut *ptr); }
+                    if !ptr.is_null() {
+                        handle_dark_mode_toggle(hwnd, &mut *ptr);
+                    }
                     LRESULT(0)
                 }
 
                 // ── Search commands ───────────────────────────────────────────
                 IDM_SEARCH_FIND => {
-                    if !ptr.is_null() { handle_find_open(hwnd, &mut *ptr); }
+                    if !ptr.is_null() {
+                        handle_find_open(hwnd, &mut *ptr);
+                    }
                     LRESULT(0)
                 }
                 IDM_SEARCH_REPLACE => {
-                    if !ptr.is_null() { handle_replace_open(hwnd, &mut *ptr); }
+                    if !ptr.is_null() {
+                        handle_replace_open(hwnd, &mut *ptr);
+                    }
                     LRESULT(0)
                 }
                 IDM_SEARCH_FIND_NEXT => {
-                    if !ptr.is_null() { handle_find_next(hwnd, &mut *ptr, true); }
+                    if !ptr.is_null() {
+                        handle_find_next(hwnd, &mut *ptr, true);
+                    }
                     LRESULT(0)
                 }
                 IDM_SEARCH_FIND_PREV => {
-                    if !ptr.is_null() { handle_find_next(hwnd, &mut *ptr, false); }
+                    if !ptr.is_null() {
+                        handle_find_next(hwnd, &mut *ptr, false);
+                    }
                     LRESULT(0)
                 }
                 IDM_SEARCH_GOTO_LINE => {
@@ -985,16 +1136,18 @@ unsafe extern "system" fn wnd_proc(
             // NMHDR) — guaranteed for all WM_NOTIFY messages.
             let hdr = &*(lparam.0 as *const windows::Win32::UI::Controls::NMHDR);
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
-            if ptr.is_null() { return LRESULT(0); }
+            if ptr.is_null() {
+                return LRESULT(0);
+            }
 
             match hdr.code {
                 // ── Tab-control ───────────────────────────────────────────────
                 TCN_SELCHANGE => {
                     // The tab control has already changed the selection; read it.
-                    let sel = SendMessageW(
-                        (*ptr).hwnd_tab, TCM_GETCURSEL, WPARAM(0), LPARAM(0),
-                    );
-                    if sel.0 < 0 { return LRESULT(0); } // shouldn't happen
+                    let sel = SendMessageW((*ptr).hwnd_tab, TCM_GETCURSEL, WPARAM(0), LPARAM(0));
+                    if sel.0 < 0 {
+                        return LRESULT(0);
+                    } // shouldn't happen
                     let new_idx = sel.0 as usize;
 
                     if new_idx != (*ptr).app.active_idx {
@@ -1070,8 +1223,12 @@ unsafe extern "system" fn wnd_proc(
                 // SAFETY: Windows guarantees LPARAM is a valid *const RECT for WM_DPICHANGED.
                 let r = &*(lparam.0 as *const RECT);
                 let _ = SetWindowPos(
-                    hwnd, HWND::default(),
-                    r.left, r.top, r.right - r.left, r.bottom - r.top,
+                    hwnd,
+                    HWND::default(),
+                    r.left,
+                    r.top,
+                    r.right - r.left,
+                    r.bottom - r.top,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
                 update_statusbar_parts(state);
@@ -1111,7 +1268,9 @@ unsafe fn handle_new_file(hwnd: HWND, state: &mut WindowState) {
 /// # Safety
 /// Called only from WM_COMMAND on the UI thread with a valid `state`.
 unsafe fn handle_file_open(hwnd: HWND, state: &mut WindowState) {
-    let Some(path) = show_open_dialog(hwnd) else { return; };
+    let Some(path) = show_open_dialog(hwnd) else {
+        return;
+    };
 
     // Activate the existing tab if this file is already open.
     if let Some(dup_idx) = state
@@ -1124,9 +1283,7 @@ unsafe fn handle_file_open(hwnd: HWND, state: &mut WindowState) {
             state.sci_views[state.app.active_idx].show(false);
             state.app.active_idx = dup_idx;
             state.sci_views[dup_idx].show(true);
-            let _ = SendMessageW(
-                state.hwnd_tab, TCM_SETCURSEL, WPARAM(dup_idx), LPARAM(0),
-            );
+            let _ = SendMessageW(state.hwnd_tab, TCM_SETCURSEL, WPARAM(dup_idx), LPARAM(0));
             let eol = state.sci_views[dup_idx].eol_mode();
             state.app.active_doc_mut().eol = eol;
             let mut rc = RECT::default();
@@ -1139,8 +1296,11 @@ unsafe fn handle_file_open(hwnd: HWND, state: &mut WindowState) {
     }
 
     let bytes = match std::fs::read(&path) {
-        Ok(b)  => b,
-        Err(e) => { show_error_dialog(&format!("Could not open file:\n{e}")); return; }
+        Ok(b) => b,
+        Err(e) => {
+            show_error_dialog(&format!("Could not open file:\n{e}"));
+            return;
+        }
     };
 
     // Reuse the current tab if it is a clean untitled document.
@@ -1169,7 +1329,11 @@ unsafe fn load_file_into_active_tab(
         (doc.large_file, doc.eol)
     };
     state.sci_views[idx].set_large_file_mode(large_file);
-    apply_highlighting(&state.sci_views[idx], state.app.active_doc(), state.dark_mode);
+    apply_highlighting(
+        &state.sci_views[idx],
+        state.app.active_doc(),
+        state.dark_mode,
+    );
     state.sci_views[idx].set_eol_mode(eol);
     state.sci_views[idx].set_word_wrap(false); // always off on open; user toggles explicitly
     state.sci_views[idx].set_text(&utf8);
@@ -1191,7 +1355,7 @@ unsafe fn open_file_in_new_tab(
 ) {
     let sci = match new_scintilla_view(hwnd, state) {
         Some(s) => s,
-        None    => return,
+        None => return,
     };
 
     // Hide current view, push the new tab.
@@ -1211,7 +1375,11 @@ unsafe fn open_file_in_new_tab(
         (doc.large_file, doc.eol)
     };
     state.sci_views[new_idx].set_large_file_mode(large_file);
-    apply_highlighting(&state.sci_views[new_idx], state.app.active_doc(), state.dark_mode);
+    apply_highlighting(
+        &state.sci_views[new_idx],
+        state.app.active_doc(),
+        state.dark_mode,
+    );
     state.sci_views[new_idx].set_eol_mode(eol);
     state.sci_views[new_idx].set_word_wrap(false); // always off on open; user toggles explicitly
     state.sci_views[new_idx].set_text(&utf8);
@@ -1235,7 +1403,7 @@ unsafe fn open_file_in_new_tab(
 unsafe fn open_untitled_tab(hwnd: HWND, state: &mut WindowState) {
     let sci = match new_scintilla_view(hwnd, state) {
         Some(s) => s,
-        None    => return,
+        None => return,
     };
 
     state.sci_views[state.app.active_idx].show(false);
@@ -1247,7 +1415,11 @@ unsafe fn open_untitled_tab(hwnd: HWND, state: &mut WindowState) {
     let _ = SendMessageW(state.hwnd_tab, TCM_SETCURSEL, WPARAM(new_idx), LPARAM(0));
 
     // Apply Consolas font + current palette so all tabs are visually consistent.
-    apply_highlighting(&state.sci_views[new_idx], state.app.active_doc(), state.dark_mode);
+    apply_highlighting(
+        &state.sci_views[new_idx],
+        state.app.active_doc(),
+        state.dark_mode,
+    );
 
     state.sci_views[new_idx].show(true);
 
@@ -1267,12 +1439,12 @@ unsafe fn open_untitled_tab(hwnd: HWND, state: &mut WindowState) {
 /// `state.sci_dll` must be live; `hwnd` must be the main window.
 unsafe fn new_scintilla_view(hwnd: HWND, state: &WindowState) -> Option<ScintillaView> {
     let hmodule = match GetModuleHandleW(None) {
-        Ok(h)  => h,
+        Ok(h) => h,
         Err(_) => return None,
     };
     let hinstance = HINSTANCE(hmodule.0);
     match ScintillaView::create(hwnd, hinstance, &state.sci_dll) {
-        Ok(s)  => Some(s),
+        Ok(s) => Some(s),
         Err(e) => {
             show_error_dialog(&format!("Could not create editor view:\n{e}"));
             None
@@ -1298,13 +1470,13 @@ unsafe fn handle_file_save(hwnd: HWND, state: &mut WindowState, force_dialog: bo
             .unwrap_or_default();
         match show_save_dialog(hwnd, &default) {
             Some(p) => p,
-            None    => return,
+            None => return,
         }
     } else {
         state.app.active_doc().path.clone().unwrap()
     };
 
-    let idx  = state.app.active_idx;
+    let idx = state.app.active_idx;
     let utf8 = state.sci_views[idx].get_text();
     match state.app.save(path, &utf8) {
         Ok(()) => {
@@ -1389,9 +1561,9 @@ unsafe fn post_create_init(hwnd: HWND, state: &mut WindowState) {
 /// Recompute and apply DPI-scaled status-bar part widths.
 fn update_statusbar_parts(state: &WindowState) {
     use crate::platform::win32::dpi;
-    let enc  = dpi::scale(SB_PART_ENCODING_W_BASE, state.dpi);
-    let eol  = dpi::scale(SB_PART_EOL_W_BASE,      state.dpi);
-    let lang = dpi::scale(SB_PART_LANG_W_BASE,      state.dpi);
+    let enc = dpi::scale(SB_PART_ENCODING_W_BASE, state.dpi);
+    let eol = dpi::scale(SB_PART_EOL_W_BASE, state.dpi);
+    let lang = dpi::scale(SB_PART_LANG_W_BASE, state.dpi);
     let parts: [i32; 4] = [enc, enc + eol, enc + eol + lang, -1];
     // SAFETY: hwnd_status is a valid status-bar HWND for the lifetime of WindowState.
     unsafe {
@@ -1465,9 +1637,8 @@ unsafe fn handle_find_open(hwnd: HWND, state: &mut WindowState) {
     }
     state.findreplace.hwndOwner = hwnd;
     // Clear the replace-only flag so FindTextW shows the Find dialog.
-    state.findreplace.Flags = FINDREPLACE_FLAGS(
-        (state.findreplace.Flags.0 & !(FR_REPLACE | FR_REPLACEALL)) | FR_DOWN,
-    );
+    state.findreplace.Flags =
+        FINDREPLACE_FLAGS((state.findreplace.Flags.0 & !(FR_REPLACE | FR_REPLACEALL)) | FR_DOWN);
     // SAFETY: findreplace is stable in heap memory; hwndOwner is valid.
     // FindTextW returns HWND directly (null = failure), same as CreateWindowExW.
     state.hwnd_find_dlg = FindTextW(&mut state.findreplace);
@@ -1483,9 +1654,7 @@ unsafe fn handle_replace_open(hwnd: HWND, state: &mut WindowState) {
         return;
     }
     state.findreplace.hwndOwner = hwnd;
-    state.findreplace.Flags = FINDREPLACE_FLAGS(
-        state.findreplace.Flags.0 | FR_DOWN,
-    );
+    state.findreplace.Flags = FINDREPLACE_FLAGS(state.findreplace.Flags.0 | FR_DOWN);
     // SAFETY: findreplace is stable in heap memory; hwndOwner is valid.
     state.hwnd_find_dlg = ReplaceTextW(&mut state.findreplace);
 }
@@ -1509,11 +1678,20 @@ unsafe fn handle_findreplace_msg(hwnd: HWND, lparam: LPARAM, state: &mut WindowS
     }
 
     let find_bytes = pwstr_to_utf8(fr.lpstrFindWhat);
-    if find_bytes.is_empty() { return; }
+    if find_bytes.is_empty() {
+        return;
+    }
 
-    let sci_flags = (if flags & FR_MATCHCASE != 0 { SCFIND_MATCHCASE } else { 0 })
-                  | (if flags & FR_WHOLEWORD != 0 { SCFIND_WHOLEWORD } else { 0 });
-    let forward   = flags & FR_DOWN != 0;
+    let sci_flags = (if flags & FR_MATCHCASE != 0 {
+        SCFIND_MATCHCASE
+    } else {
+        0
+    }) | (if flags & FR_WHOLEWORD != 0 {
+        SCFIND_WHOLEWORD
+    } else {
+        0
+    });
+    let forward = flags & FR_DOWN != 0;
 
     let idx = state.app.active_idx;
     let sci = &state.sci_views[idx];
@@ -1547,7 +1725,7 @@ unsafe fn handle_replace_once(
     forward: bool,
 ) {
     let sel_start = sci.selection_start();
-    let sel_end   = sci.selection_end();
+    let sel_end = sci.selection_end();
 
     // If the current selection exactly matches the search term, replace it.
     if sel_end > sel_start {
@@ -1577,9 +1755,16 @@ unsafe fn handle_find_next(hwnd: HWND, state: &mut WindowState, forward: bool) {
     }
 
     // Derive Scintilla flags from the last dialog flag state.
-    let fr_flags  = state.findreplace.Flags.0;
-    let sci_flags = (if fr_flags & FR_MATCHCASE != 0 { SCFIND_MATCHCASE } else { 0 })
-                  | (if fr_flags & FR_WHOLEWORD != 0 { SCFIND_WHOLEWORD } else { 0 });
+    let fr_flags = state.findreplace.Flags.0;
+    let sci_flags = (if fr_flags & FR_MATCHCASE != 0 {
+        SCFIND_MATCHCASE
+    } else {
+        0
+    }) | (if fr_flags & FR_WHOLEWORD != 0 {
+        SCFIND_WHOLEWORD
+    } else {
+        0
+    });
 
     // Decode the UTF-16 find buffer to UTF-8.
     let len = state.find_buf.iter().position(|&c| c == 0).unwrap_or(0);
@@ -1597,7 +1782,7 @@ unsafe fn handle_find_next(hwnd: HWND, state: &mut WindowState, forward: bool) {
 /// # Safety
 /// Called only from WM_COMMAND on the UI thread with a valid `state`.
 unsafe fn handle_goto_line(hwnd: HWND, state: &mut WindowState, hinstance: HINSTANCE) {
-    let idx   = state.app.active_idx;
+    let idx = state.app.active_idx;
     let total = state.sci_views[idx].line_count();
     let (current, _) = state.sci_views[idx].caret_line_col(); // 1-based
 
@@ -1615,7 +1800,7 @@ unsafe fn handle_goto_line(hwnd: HWND, state: &mut WindowState, hinstance: HINST
 /// Data passed to `goto_dlg_proc` via the `lParam` of `WM_INITDIALOG`.
 struct GotoLineParams {
     current: usize, // 1-based current line (pre-filled in the edit)
-    total:   usize, // total lines (upper bound for validation)
+    total: usize,   // total lines (upper bound for validation)
 }
 
 /// Show a modal "Go to Line" dialog.
@@ -1627,12 +1812,15 @@ struct GotoLineParams {
 /// `hwnd_parent` and `hinstance` must be valid Win32 handles.
 unsafe fn show_goto_line_dialog(
     hwnd_parent: HWND,
-    hinstance:   HINSTANCE,
+    hinstance: HINSTANCE,
     current_line: usize,
-    total_lines:  usize,
+    total_lines: usize,
 ) -> Option<usize> {
     let template = build_goto_line_template(total_lines);
-    let params   = GotoLineParams { current: current_line, total: total_lines };
+    let params = GotoLineParams {
+        current: current_line,
+        total: total_lines,
+    };
 
     // SAFETY: template contains a correctly structured DLGTEMPLATE byte blob;
     // goto_dlg_proc is a valid DLGPROC; params lives for the duration of the
@@ -1645,7 +1833,11 @@ unsafe fn show_goto_line_dialog(
         LPARAM(&params as *const GotoLineParams as isize),
     );
 
-    if result > 0 { Some(result as usize) } else { None }
+    if result > 0 {
+        Some(result as usize)
+    } else {
+        None
+    }
 }
 
 /// Dialog procedure for the "Go to Line" modal dialog.
@@ -1653,12 +1845,12 @@ unsafe fn show_goto_line_dialog(
 /// # Safety
 /// Called by Windows with valid arguments for the lifetime of the dialog.
 unsafe extern "system" fn goto_dlg_proc(
-    hwnd:   HWND,
-    msg:    u32,
+    hwnd: HWND,
+    msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    const EDIT_ID:   i32 = 100;
+    const EDIT_ID: i32 = 100;
     const EM_SETSEL: u32 = 0x00B1;
 
     match msg {
@@ -1687,8 +1879,8 @@ unsafe extern "system" fn goto_dlg_proc(
             match id {
                 1 => {
                     // IDOK — validate the input and close.
-                    let params_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA)
-                        as *const GotoLineParams;
+                    let params_ptr =
+                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const GotoLineParams;
                     let total = if !params_ptr.is_null() {
                         (*params_ptr).total
                     } else {
@@ -1697,7 +1889,7 @@ unsafe extern "system" fn goto_dlg_proc(
 
                     let mut buf = [0u16; 32];
                     let len = GetDlgItemTextW(hwnd, EDIT_ID, PWSTR(buf.as_mut_ptr()), 32);
-                    let s   = String::from_utf16_lossy(&buf[..len as usize]);
+                    let s = String::from_utf16_lossy(&buf[..len as usize]);
                     match s.trim().parse::<usize>() {
                         Ok(n) if n >= 1 && n <= total => {
                             let _ = EndDialog(hwnd, n as isize);
@@ -1731,20 +1923,20 @@ unsafe extern "system" fn goto_dlg_proc(
 ///   Cancel (IDCANCEL=2)         at (128, 36) 50×14 DU
 fn build_goto_line_template(total_lines: usize) -> Vec<u8> {
     // ── Local bit constants (u32 to avoid conflict with WINDOW_STYLE newtypes) ──
-    const WS_POPUP_V:    u32 = 0x8000_0000;
-    const WS_CAPTION_V:  u32 = 0x00C0_0000; // WS_BORDER | WS_DLGFRAME
-    const WS_SYSMENU_V:  u32 = 0x0008_0000;
+    const WS_POPUP_V: u32 = 0x8000_0000;
+    const WS_CAPTION_V: u32 = 0x00C0_0000; // WS_BORDER | WS_DLGFRAME
+    const WS_SYSMENU_V: u32 = 0x0008_0000;
     const DS_MODALFRAME: u32 = 0x0080;
-    const DS_CENTER:     u32 = 0x0800;
-    const WS_CHILD_V:    u32 = 0x4000_0000;
-    const WS_VISIBLE_V:  u32 = 0x1000_0000;
-    const WS_BORDER_V:   u32 = 0x0080_0000;
-    const WS_TABSTOP_V:  u32 = 0x0001_0000;
+    const DS_CENTER: u32 = 0x0800;
+    const WS_CHILD_V: u32 = 0x4000_0000;
+    const WS_VISIBLE_V: u32 = 0x1000_0000;
+    const WS_BORDER_V: u32 = 0x0080_0000;
+    const WS_TABSTOP_V: u32 = 0x0001_0000;
     const ES_AUTOHSCROLL: u32 = 0x0080;
-    const BS_DEFPB:      u32 = 0x0001; // BS_DEFPUSHBUTTON
-    // Predefined class atoms for controls in a dialog template.
+    const BS_DEFPB: u32 = 0x0001; // BS_DEFPUSHBUTTON
+                                  // Predefined class atoms for controls in a dialog template.
     const ATOM_BUTTON: u16 = 0x0080;
-    const ATOM_EDIT:   u16 = 0x0081;
+    const ATOM_EDIT: u16 = 0x0081;
     const ATOM_STATIC: u16 = 0x0082;
 
     let dlg_style: u32 = WS_POPUP_V | WS_CAPTION_V | WS_SYSMENU_V | DS_MODALFRAME | DS_CENTER;
@@ -1755,35 +1947,44 @@ fn build_goto_line_template(total_lines: usize) -> Vec<u8> {
 
     // ── DLGTEMPLATE header ────────────────────────────────────────────────────
     push_u32(&mut v, dlg_style);
-    push_u32(&mut v, 0);          // dwExtendedStyle
-    push_u16(&mut v, 4);          // cdit — number of controls
-    push_u16(&mut v, 0);          // x (DS_CENTER ignores these)
-    push_u16(&mut v, 0);          // y
-    push_u16(&mut v, 185);        // cx (dialog units)
-    push_u16(&mut v, 55);         // cy
-    push_u16(&mut v, 0);          // menu: none
-    push_u16(&mut v, 0);          // window class: default dialog
+    push_u32(&mut v, 0); // dwExtendedStyle
+    push_u16(&mut v, 4); // cdit — number of controls
+    push_u16(&mut v, 0); // x (DS_CENTER ignores these)
+    push_u16(&mut v, 0); // y
+    push_u16(&mut v, 185); // cx (dialog units)
+    push_u16(&mut v, 55); // cy
+    push_u16(&mut v, 0); // menu: none
+    push_u16(&mut v, 0); // window class: default dialog
     push_wstr(&mut v, "Go to Line"); // title
 
     // ── Control 1: Static label ───────────────────────────────────────────────
     align4(&mut v);
     push_u32(&mut v, WS_CHILD_V | WS_VISIBLE_V); // SS_LEFT = 0
     push_u32(&mut v, 0);
-    push_u16(&mut v, 7);   push_u16(&mut v, 7);
-    push_u16(&mut v, 170); push_u16(&mut v, 9);
+    push_u16(&mut v, 7);
+    push_u16(&mut v, 7);
+    push_u16(&mut v, 170);
+    push_u16(&mut v, 9);
     push_u16(&mut v, 0xFFFF); // id (unused for statics)
-    push_u16(&mut v, 0xFFFF); push_u16(&mut v, ATOM_STATIC);
+    push_u16(&mut v, 0xFFFF);
+    push_u16(&mut v, ATOM_STATIC);
     push_wstr(&mut v, &label);
     push_u16(&mut v, 0); // cbWndExtra
 
     // ── Control 2: Edit (ID=100) ──────────────────────────────────────────────
     align4(&mut v);
-    push_u32(&mut v, WS_CHILD_V | WS_VISIBLE_V | WS_BORDER_V | WS_TABSTOP_V | ES_AUTOHSCROLL);
+    push_u32(
+        &mut v,
+        WS_CHILD_V | WS_VISIBLE_V | WS_BORDER_V | WS_TABSTOP_V | ES_AUTOHSCROLL,
+    );
     push_u32(&mut v, 0);
-    push_u16(&mut v, 7);   push_u16(&mut v, 18);
-    push_u16(&mut v, 170); push_u16(&mut v, 14);
+    push_u16(&mut v, 7);
+    push_u16(&mut v, 18);
+    push_u16(&mut v, 170);
+    push_u16(&mut v, 14);
     push_u16(&mut v, 100); // id=100
-    push_u16(&mut v, 0xFFFF); push_u16(&mut v, ATOM_EDIT);
+    push_u16(&mut v, 0xFFFF);
+    push_u16(&mut v, ATOM_EDIT);
     push_wstr(&mut v, "");
     push_u16(&mut v, 0);
 
@@ -1791,10 +1992,13 @@ fn build_goto_line_template(total_lines: usize) -> Vec<u8> {
     align4(&mut v);
     push_u32(&mut v, WS_CHILD_V | WS_VISIBLE_V | WS_TABSTOP_V | BS_DEFPB);
     push_u32(&mut v, 0);
-    push_u16(&mut v, 73); push_u16(&mut v, 36);
-    push_u16(&mut v, 50); push_u16(&mut v, 14);
-    push_u16(&mut v, 1);  // IDOK
-    push_u16(&mut v, 0xFFFF); push_u16(&mut v, ATOM_BUTTON);
+    push_u16(&mut v, 73);
+    push_u16(&mut v, 36);
+    push_u16(&mut v, 50);
+    push_u16(&mut v, 14);
+    push_u16(&mut v, 1); // IDOK
+    push_u16(&mut v, 0xFFFF);
+    push_u16(&mut v, ATOM_BUTTON);
     push_wstr(&mut v, "OK");
     push_u16(&mut v, 0);
 
@@ -1802,10 +2006,13 @@ fn build_goto_line_template(total_lines: usize) -> Vec<u8> {
     align4(&mut v);
     push_u32(&mut v, WS_CHILD_V | WS_VISIBLE_V | WS_TABSTOP_V);
     push_u32(&mut v, 0);
-    push_u16(&mut v, 128); push_u16(&mut v, 36);
-    push_u16(&mut v, 50);  push_u16(&mut v, 14);
-    push_u16(&mut v, 2);   // IDCANCEL
-    push_u16(&mut v, 0xFFFF); push_u16(&mut v, ATOM_BUTTON);
+    push_u16(&mut v, 128);
+    push_u16(&mut v, 36);
+    push_u16(&mut v, 50);
+    push_u16(&mut v, 14);
+    push_u16(&mut v, 2); // IDCANCEL
+    push_u16(&mut v, 0xFFFF);
+    push_u16(&mut v, ATOM_BUTTON);
     push_wstr(&mut v, "Cancel");
     push_u16(&mut v, 0);
 
@@ -1815,20 +2022,28 @@ fn build_goto_line_template(total_lines: usize) -> Vec<u8> {
 // ── DLGTEMPLATE builder helpers ───────────────────────────────────────────────
 
 #[inline]
-fn push_u16(v: &mut Vec<u8>, n: u16) { v.extend_from_slice(&n.to_le_bytes()); }
+fn push_u16(v: &mut Vec<u8>, n: u16) {
+    v.extend_from_slice(&n.to_le_bytes());
+}
 
 #[inline]
-fn push_u32(v: &mut Vec<u8>, n: u32) { v.extend_from_slice(&n.to_le_bytes()); }
+fn push_u32(v: &mut Vec<u8>, n: u32) {
+    v.extend_from_slice(&n.to_le_bytes());
+}
 
 /// Append a null-terminated UTF-16 string.
 fn push_wstr(v: &mut Vec<u8>, s: &str) {
-    for cu in s.encode_utf16() { push_u16(v, cu); }
+    for cu in s.encode_utf16() {
+        push_u16(v, cu);
+    }
     push_u16(v, 0); // null terminator
 }
 
 /// Pad to the next 4-byte boundary (required between DLGITEMTEMPLATE entries).
 fn align4(v: &mut Vec<u8>) {
-    while v.len() % 4 != 0 { v.push(0); }
+    while v.len() % 4 != 0 {
+        v.push(0);
+    }
 }
 
 // ── PWSTR → UTF-8 helper ──────────────────────────────────────────────────────
@@ -1841,9 +2056,14 @@ fn align4(v: &mut Vec<u8>) {
 /// `pwstr` must be a valid null-terminated UTF-16 string for the duration of
 /// this call (guaranteed by the FINDREPLACEW dialog contract).
 unsafe fn pwstr_to_utf8(pwstr: PWSTR) -> Vec<u8> {
-    if pwstr.is_null() { return Vec::new(); }
+    if pwstr.is_null() {
+        return Vec::new();
+    }
     // SAFETY: caller guarantees pwstr is a valid null-terminated UTF-16 string.
-    pwstr.to_string().map(|s| s.into_bytes()).unwrap_or_default()
+    pwstr
+        .to_string()
+        .map(|s| s.into_bytes())
+        .unwrap_or_default()
 }
 
 // ── Status bar / title ────────────────────────────────────────────────────────
@@ -1866,7 +2086,7 @@ fn apply_highlighting(sci: &ScintillaView, doc: &crate::app::DocumentState, dark
     }
     let lang = match &doc.path {
         Some(p) => crate::languages::language_from_path(p),
-        None    => crate::languages::Language::PlainText,
+        None => crate::languages::Language::PlainText,
     };
     sci.set_lexer(lang.lexer_id());
     for (set_idx, words) in crate::languages::keywords(lang) {
@@ -1889,7 +2109,7 @@ unsafe fn update_status_bar(state: &WindowState) {
     };
     let lang = match &path {
         Some(p) => crate::languages::language_from_path(p),
-        None    => crate::languages::Language::PlainText,
+        None => crate::languages::Language::PlainText,
     };
     let lang_text = if large_file {
         format!("{} [Large]", lang.display_name())
@@ -1935,7 +2155,7 @@ unsafe fn handle_close_tab(hwnd: HWND, state: &mut WindowState, idx: usize) {
     // ── Dirty check ───────────────────────────────────────────────────────────
     if state.app.tabs[idx].dirty {
         let name = state.app.tabs[idx].display_name();
-        let msg  = format!("\"{name}\" has unsaved changes.\n\nSave before closing?");
+        let msg = format!("\"{name}\" has unsaved changes.\n\nSave before closing?");
         let wide: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: wide is valid null-terminated UTF-16 that outlives the call.
         let result = MessageBoxW(
@@ -1947,22 +2167,24 @@ unsafe fn handle_close_tab(hwnd: HWND, state: &mut WindowState, idx: usize) {
         match result {
             r if r == IDYES => {
                 // Try to save; if it fails or the user cancels the dialog, abort.
-                if !save_tab_for_close(hwnd, state, idx) { return; }
+                if !save_tab_for_close(hwnd, state, idx) {
+                    return;
+                }
             }
             r if r == IDNO => { /* discard — fall through to close */ }
-            _              => return, // Cancel
+            _ => return, // Cancel
         }
     }
 
     // ── Last tab: reset to untitled instead of removing ───────────────────────
     if state.app.tab_count() == 1 {
         let doc = &mut state.app.tabs[0];
-        doc.path       = None;
-        doc.dirty      = false;
+        doc.path = None;
+        doc.dirty = false;
         doc.large_file = false;
-        doc.encoding   = crate::app::Encoding::Utf8;
-        doc.eol        = crate::app::EolMode::Crlf;
-        doc.word_wrap  = false;
+        doc.encoding = crate::app::Encoding::Utf8;
+        doc.eol = crate::app::EolMode::Crlf;
+        doc.word_wrap = false;
         state.sci_views[0].set_eol_mode(crate::app::EolMode::Crlf);
         state.sci_views[0].set_word_wrap(false);
         state.sci_views[0].set_text(b"");
@@ -2021,7 +2243,7 @@ unsafe fn save_tab_for_close(hwnd: HWND, state: &mut WindowState, idx: usize) ->
     } else {
         match show_save_dialog(hwnd, "") {
             Some(p) => p,
-            None    => return false, // user cancelled the dialog
+            None => return false, // user cancelled the dialog
         }
     };
 
@@ -2096,11 +2318,11 @@ fn save_session(state: &WindowState) {
         .iter()
         .enumerate()
         .map(|(i, doc)| crate::session::TabEntry {
-            path:        doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
-            caret_pos:   state.sci_views[i].caret_pos(),
+            path: doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            caret_pos: state.sci_views[i].caret_pos(),
             scroll_line: state.sci_views[i].first_visible_line(),
-            encoding:    doc.encoding.as_str().to_owned(),
-            eol:         doc.eol.as_str().to_owned(),
+            encoding: doc.encoding.as_str().to_owned(),
+            eol: doc.eol.as_str().to_owned(),
         })
         .collect();
 
@@ -2118,7 +2340,9 @@ fn save_session(state: &WindowState) {
 /// `hwnd` must be the valid main-window handle; `state` must point to a live
 /// `WindowState`.
 unsafe fn restore_session(hwnd: HWND, state: &mut WindowState) {
-    let Some(sf) = crate::session::load() else { return; };
+    let Some(sf) = crate::session::load() else {
+        return;
+    };
 
     // Restore dark mode BEFORE loading files so each apply_highlighting call
     // uses the correct palette.
@@ -2131,12 +2355,16 @@ unsafe fn restore_session(hwnd: HWND, state: &mut WindowState) {
     let mut opened_any = false;
 
     for entry in &sf.tabs {
-        let Some(path_str) = &entry.path else { continue; };
+        let Some(path_str) = &entry.path else {
+            continue;
+        };
         let path = std::path::PathBuf::from(path_str);
-        if !path.exists() { continue; }
+        if !path.exists() {
+            continue;
+        }
 
         let bytes = match std::fs::read(&path) {
-            Ok(b)  => b,
+            Ok(b) => b,
             Err(_) => continue,
         };
 
@@ -2156,7 +2384,9 @@ unsafe fn restore_session(hwnd: HWND, state: &mut WindowState) {
         opened_any = true;
     }
 
-    if !opened_any { return; }
+    if !opened_any {
+        return;
+    }
 
     // Restore the active tab (clamped to the number of tabs we actually opened).
     let target = sf.active_tab.min(state.app.tab_count() - 1);
@@ -2182,5 +2412,8 @@ unsafe fn restore_session(hwnd: HWND, state: &mut WindowState) {
 fn last_error(function: &'static str) -> RivetError {
     // SAFETY: GetLastError reads thread-local state set by the failing call.
     let code = unsafe { GetLastError() };
-    RivetError::Win32 { function, code: code.0 }
+    RivetError::Win32 {
+        function,
+        code: code.0,
+    }
 }

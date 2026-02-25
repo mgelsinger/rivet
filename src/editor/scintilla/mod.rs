@@ -27,18 +27,15 @@
 pub mod messages;
 
 use messages::{
-    SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_WRAP_NONE, SC_WRAP_WORD, SCLEX_NULL,
-    SCI_BEGINUNDOACTION, SCI_CONVERTEOLS, SCI_ENDUNDOACTION,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETTARGETEND, SCI_GETTEXT, SCI_GETWRAPMODE,
-    SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_POSITIONFROMLINE,
-    SCI_REDO, SCI_REPLACETARGET, SCI_SCROLLCARET,
-    SCI_SEARCHINTARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETFIRSTVISIBLELINE, SCI_SETLEXER,
-    SCI_SETSAVEPOINT, SCI_SETSEARCHFLAGS, SCI_SETSEL,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETWRAPMODE, SCI_SETEOLMODE,
-    SCI_SETKEYWORDS, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD,
-    SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETSIZE,
+    SCI_BEGINUNDOACTION, SCI_CONVERTEOLS, SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
+    SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETTARGETEND, SCI_GETTEXT, SCI_GETWRAPMODE, SCI_GOTOPOS,
+    SCI_LINEFROMPOSITION, SCI_POSITIONFROMLINE, SCI_REDO, SCI_REPLACETARGET, SCI_SCROLLCARET,
+    SCI_SEARCHINTARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETEOLMODE, SCI_SETFIRSTVISIBLELINE,
+    SCI_SETKEYWORDS, SCI_SETLEXER, SCI_SETSAVEPOINT, SCI_SETSEARCHFLAGS, SCI_SETSEL,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETWRAPMODE, SCI_STYLECLEARALL,
+    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETSIZE,
+    SCLEX_NULL, SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_WRAP_NONE, SC_WRAP_WORD,
     WM_CLEAR, WM_COPY, WM_CUT, WM_PASTE, WM_UNDO,
 };
 
@@ -155,13 +152,11 @@ impl ScintillaView {
     /// `_dll` proves that `SciLexer.dll` is loaded and the `"Scintilla"` class
     /// is registered.  The window is created hidden with zero size; call
     /// `show(true)` and `SetWindowPos` to make it visible.
-    pub(crate) fn create(
-        hwnd_parent: HWND,
-        hinstance: HINSTANCE,
-        _dll: &SciDll,
-    ) -> Result<Self> {
-        let class_wide: Vec<u16> =
-            CLASS_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+    pub(crate) fn create(hwnd_parent: HWND, hinstance: HINSTANCE, _dll: &SciDll) -> Result<Self> {
+        let class_wide: Vec<u16> = CLASS_NAME
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
         // SAFETY: class_wide is null-terminated UTF-16 for the class registered
         // by SciLexer.dll (_dll proves the DLL is loaded).  hwnd_parent and
@@ -173,7 +168,10 @@ impl ScintillaView {
                 PCWSTR(class_wide.as_ptr()),
                 PCWSTR::null(),
                 WS_CHILD | WS_CLIPSIBLINGS | WINDOW_STYLE(0x0200_0000), // WS_CLIPCHILDREN
-                0, 0, 0, 0,
+                0,
+                0,
+                0,
+                0,
                 hwnd_parent,
                 HMENU::default(),
                 hinstance,
@@ -185,7 +183,10 @@ impl ScintillaView {
             // SAFETY: GetLastError reads thread-local state set by the just-
             // failed CreateWindowExW; no Win32 calls between them.
             let code = unsafe { GetLastError().0 };
-            return Err(RivetError::Win32 { function: "CreateWindowExW (Scintilla)", code });
+            return Err(RivetError::Win32 {
+                function: "CreateWindowExW (Scintilla)",
+                code,
+            });
         }
 
         // SAFETY: hwnd is a valid Scintilla window.  SCI_SETCODEPAGE with
@@ -235,22 +236,28 @@ impl ScintillaView {
         buf.push(0);
         // SAFETY: hwnd valid; buf is null-terminated UTF-8 that outlives the call.
         unsafe {
-            let _ = SendMessageW(self.hwnd, SCI_SETTEXT, WPARAM(0), LPARAM(buf.as_ptr() as isize));
+            let _ = SendMessageW(
+                self.hwnd,
+                SCI_SETTEXT,
+                WPARAM(0),
+                LPARAM(buf.as_ptr() as isize),
+            );
         }
     }
 
     /// Read the full document text as UTF-8 bytes (without null terminator).
     pub(crate) fn get_text(&self) -> Vec<u8> {
         // SAFETY: hwnd valid; SCI_GETLENGTH is a read-only query.
-        let len = unsafe {
-            SendMessageW(self.hwnd, SCI_GETLENGTH, WPARAM(0), LPARAM(0)).0 as usize
-        };
+        let len =
+            unsafe { SendMessageW(self.hwnd, SCI_GETLENGTH, WPARAM(0), LPARAM(0)).0 as usize };
         let mut buf = vec![0u8; len + 1];
         // SAFETY: buf is len+1 bytes; SCI_GETTEXT with matching buffer size is safe.
         unsafe {
             let _ = SendMessageW(
-                self.hwnd, SCI_GETTEXT,
-                WPARAM(len + 1), LPARAM(buf.as_mut_ptr() as isize),
+                self.hwnd,
+                SCI_GETTEXT,
+                WPARAM(len + 1),
+                LPARAM(buf.as_mut_ptr() as isize),
             );
         }
         buf.truncate(len);
@@ -321,8 +328,10 @@ impl ScintillaView {
         // SAFETY: hwnd valid; SCI_STYLESETFORE with a valid COLORREF is documented.
         unsafe {
             let _ = SendMessageW(
-                self.hwnd, SCI_STYLESETFORE,
-                WPARAM(style as usize), LPARAM(colour as isize),
+                self.hwnd,
+                SCI_STYLESETFORE,
+                WPARAM(style as usize),
+                LPARAM(colour as isize),
             );
         }
     }
@@ -332,8 +341,10 @@ impl ScintillaView {
         // SAFETY: hwnd valid; SCI_STYLESETBACK with a valid COLORREF is documented.
         unsafe {
             let _ = SendMessageW(
-                self.hwnd, SCI_STYLESETBACK,
-                WPARAM(style as usize), LPARAM(colour as isize),
+                self.hwnd,
+                SCI_STYLESETBACK,
+                WPARAM(style as usize),
+                LPARAM(colour as isize),
             );
         }
     }
@@ -343,8 +354,10 @@ impl ScintillaView {
         // SAFETY: hwnd valid; SCI_STYLESETBOLD with 0/1 is documented.
         unsafe {
             let _ = SendMessageW(
-                self.hwnd, SCI_STYLESETBOLD,
-                WPARAM(style as usize), LPARAM(bold as isize),
+                self.hwnd,
+                SCI_STYLESETBOLD,
+                WPARAM(style as usize),
+                LPARAM(bold as isize),
             );
         }
     }
@@ -357,8 +370,10 @@ impl ScintillaView {
         // SAFETY: hwnd valid; font_name is null-terminated ASCII that outlives the call.
         unsafe {
             let _ = SendMessageW(
-                self.hwnd, SCI_STYLESETFONT,
-                WPARAM(style as usize), LPARAM(font_name.as_ptr() as isize),
+                self.hwnd,
+                SCI_STYLESETFONT,
+                WPARAM(style as usize),
+                LPARAM(font_name.as_ptr() as isize),
             );
         }
     }
@@ -368,8 +383,10 @@ impl ScintillaView {
         // SAFETY: hwnd valid; SCI_STYLESETSIZE with a positive point size is documented.
         unsafe {
             let _ = SendMessageW(
-                self.hwnd, SCI_STYLESETSIZE,
-                WPARAM(style as usize), LPARAM(size as isize),
+                self.hwnd,
+                SCI_STYLESETSIZE,
+                WPARAM(style as usize),
+                LPARAM(size as isize),
             );
         }
     }
@@ -393,9 +410,7 @@ impl ScintillaView {
     /// First visible line index (0-based, for session persistence).
     pub(crate) fn first_visible_line(&self) -> usize {
         // SAFETY: hwnd valid; read-only query.
-        unsafe {
-            SendMessageW(self.hwnd, SCI_GETFIRSTVISIBLELINE, WPARAM(0), LPARAM(0)).0 as usize
-        }
+        unsafe { SendMessageW(self.hwnd, SCI_GETFIRSTVISIBLELINE, WPARAM(0), LPARAM(0)).0 as usize }
     }
 
     /// Scroll to make `line` (0-based) the first visible line.
@@ -411,8 +426,9 @@ impl ScintillaView {
         // SAFETY: hwnd valid; all three are read-only queries.
         unsafe {
             let pos = SendMessageW(self.hwnd, SCI_GETCURRENTPOS, WPARAM(0), LPARAM(0)).0 as usize;
-            let line = SendMessageW(self.hwnd, SCI_LINEFROMPOSITION, WPARAM(pos), LPARAM(0)).0 as usize;
-            let col  = SendMessageW(self.hwnd, SCI_GETCOLUMN, WPARAM(pos), LPARAM(0)).0 as usize;
+            let line =
+                SendMessageW(self.hwnd, SCI_LINEFROMPOSITION, WPARAM(pos), LPARAM(0)).0 as usize;
+            let col = SendMessageW(self.hwnd, SCI_GETCOLUMN, WPARAM(pos), LPARAM(0)).0 as usize;
             (line + 1, col + 1)
         }
     }
@@ -423,9 +439,9 @@ impl ScintillaView {
         let mode = unsafe { SendMessageW(self.hwnd, SCI_GETEOLMODE, WPARAM(0), LPARAM(0)).0 };
         match mode {
             x if x == SC_EOL_CRLF => EolMode::Crlf,
-            x if x == SC_EOL_LF   => EolMode::Lf,
-            x if x == SC_EOL_CR   => EolMode::Cr,
-            _                     => EolMode::Crlf,
+            x if x == SC_EOL_LF => EolMode::Lf,
+            x if x == SC_EOL_CR => EolMode::Cr,
+            _ => EolMode::Crlf,
         }
     }
 
@@ -433,8 +449,8 @@ impl ScintillaView {
     pub(crate) fn set_eol_mode(&self, eol: EolMode) {
         let mode = match eol {
             EolMode::Crlf => SC_EOL_CRLF,
-            EolMode::Lf   => SC_EOL_LF,
-            EolMode::Cr   => SC_EOL_CR,
+            EolMode::Lf => SC_EOL_LF,
+            EolMode::Cr => SC_EOL_CR,
         };
         // SAFETY: hwnd valid; SCI_SETEOLMODE with a valid SC_EOL_* is documented.
         unsafe {
@@ -447,43 +463,57 @@ impl ScintillaView {
     /// Undo the last action.
     pub(crate) fn undo(&self) {
         // SAFETY: hwnd valid; WM_UNDO is a standard Win32 message Scintilla handles.
-        unsafe { let _ = SendMessageW(self.hwnd, WM_UNDO, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, WM_UNDO, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// Redo the last undone action.
     pub(crate) fn redo(&self) {
         // SAFETY: hwnd valid; SCI_REDO takes no parameters.
-        unsafe { let _ = SendMessageW(self.hwnd, SCI_REDO, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_REDO, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// Cut the current selection to the clipboard.
     pub(crate) fn cut(&self) {
         // SAFETY: hwnd valid; WM_CUT is processed natively by Scintilla.
-        unsafe { let _ = SendMessageW(self.hwnd, WM_CUT, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, WM_CUT, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// Copy the current selection to the clipboard.
     pub(crate) fn copy_to_clipboard(&self) {
         // SAFETY: hwnd valid; WM_COPY is processed natively by Scintilla.
-        unsafe { let _ = SendMessageW(self.hwnd, WM_COPY, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, WM_COPY, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// Paste from the clipboard at the caret position.
     pub(crate) fn paste(&self) {
         // SAFETY: hwnd valid; WM_PASTE is processed natively by Scintilla.
-        unsafe { let _ = SendMessageW(self.hwnd, WM_PASTE, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, WM_PASTE, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// Delete the current selection without copying to the clipboard.
     pub(crate) fn delete_selection(&self) {
         // SAFETY: hwnd valid; WM_CLEAR is processed natively by Scintilla.
-        unsafe { let _ = SendMessageW(self.hwnd, WM_CLEAR, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, WM_CLEAR, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// Select all document text.
     pub(crate) fn select_all(&self) {
         // SAFETY: hwnd valid; SCI_SELECTALL takes no parameters.
-        unsafe { let _ = SendMessageW(self.hwnd, SCI_SELECTALL, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_SELECTALL, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// Convert all existing EOL sequences in the document to `eol`.
@@ -493,8 +523,8 @@ impl ScintillaView {
     pub(crate) fn convert_eols(&self, eol: EolMode) {
         let mode = match eol {
             EolMode::Crlf => SC_EOL_CRLF,
-            EolMode::Lf   => SC_EOL_LF,
-            EolMode::Cr   => SC_EOL_CR,
+            EolMode::Lf => SC_EOL_LF,
+            EolMode::Cr => SC_EOL_CR,
         };
         // SAFETY: hwnd valid; SCI_CONVERTEOLS with a valid SC_EOL_* value is documented.
         unsafe {
@@ -514,9 +544,8 @@ impl ScintillaView {
     /// Return `true` if word wrap is currently enabled.
     pub(crate) fn is_word_wrap(&self) -> bool {
         // SAFETY: hwnd valid; SCI_GETWRAPMODE is a read-only query.
-        let mode = unsafe {
-            SendMessageW(self.hwnd, SCI_GETWRAPMODE, WPARAM(0), LPARAM(0)).0 as usize
-        };
+        let mode =
+            unsafe { SendMessageW(self.hwnd, SCI_GETWRAPMODE, WPARAM(0), LPARAM(0)).0 as usize };
         mode != SC_WRAP_NONE
     }
 
@@ -537,7 +566,7 @@ impl ScintillaView {
         // SAFETY: hwnd valid; documented Scintilla target messages.
         unsafe {
             let _ = SendMessageW(self.hwnd, SCI_SETTARGETSTART, WPARAM(start), LPARAM(0));
-            let _ = SendMessageW(self.hwnd, SCI_SETTARGETEND,   WPARAM(end),   LPARAM(0));
+            let _ = SendMessageW(self.hwnd, SCI_SETTARGETEND, WPARAM(end), LPARAM(0));
         }
     }
 
@@ -548,14 +577,24 @@ impl ScintillaView {
     pub(crate) fn search_in_target(&self, text: &[u8], flags: u32) -> Option<usize> {
         // SAFETY: hwnd valid; text is valid UTF-8 that outlives the SendMessageW call.
         unsafe {
-            let _ = SendMessageW(self.hwnd, SCI_SETSEARCHFLAGS, WPARAM(flags as usize), LPARAM(0));
+            let _ = SendMessageW(
+                self.hwnd,
+                SCI_SETSEARCHFLAGS,
+                WPARAM(flags as usize),
+                LPARAM(0),
+            );
             let result = SendMessageW(
                 self.hwnd,
                 SCI_SEARCHINTARGET,
                 WPARAM(text.len()),
                 LPARAM(text.as_ptr() as isize),
-            ).0;
-            if result < 0 { None } else { Some(result as usize) }
+            )
+            .0;
+            if result < 0 {
+                None
+            } else {
+                Some(result as usize)
+            }
         }
     }
 
@@ -576,7 +615,8 @@ impl ScintillaView {
                 SCI_REPLACETARGET,
                 WPARAM(text.len()),
                 LPARAM(text.as_ptr() as isize),
-            ).0 as usize
+            )
+            .0 as usize
         }
     }
 
@@ -598,14 +638,21 @@ impl ScintillaView {
     pub(crate) fn set_sel(&self, anchor: usize, caret: usize) {
         // SAFETY: hwnd valid; SCI_SETSEL with valid positions is documented safe.
         unsafe {
-            let _ = SendMessageW(self.hwnd, SCI_SETSEL, WPARAM(anchor), LPARAM(caret as isize));
+            let _ = SendMessageW(
+                self.hwnd,
+                SCI_SETSEL,
+                WPARAM(anchor),
+                LPARAM(caret as isize),
+            );
         }
     }
 
     /// Scroll to make the caret visible.
     pub(crate) fn scroll_caret(&self) {
         // SAFETY: hwnd valid; SCI_SCROLLCARET takes no parameters.
-        unsafe { let _ = SendMessageW(self.hwnd, SCI_SCROLLCARET, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_SCROLLCARET, WPARAM(0), LPARAM(0));
+        }
     }
 
     // ── Undo grouping ─────────────────────────────────────────────────────────
@@ -613,13 +660,17 @@ impl ScintillaView {
     /// Begin a compound undo action (multiple edits become one Ctrl+Z step).
     pub(crate) fn begin_undo_action(&self) {
         // SAFETY: hwnd valid; SCI_BEGINUNDOACTION takes no parameters.
-        unsafe { let _ = SendMessageW(self.hwnd, SCI_BEGINUNDOACTION, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_BEGINUNDOACTION, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// End the compound undo action started by `begin_undo_action`.
     pub(crate) fn end_undo_action(&self) {
         // SAFETY: hwnd valid; SCI_ENDUNDOACTION takes no parameters.
-        unsafe { let _ = SendMessageW(self.hwnd, SCI_ENDUNDOACTION, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_ENDUNDOACTION, WPARAM(0), LPARAM(0));
+        }
     }
 
     // ── Go To Line ────────────────────────────────────────────────────────────
@@ -634,9 +685,7 @@ impl ScintillaView {
     /// Byte position of the first character on `line` (0-based).
     pub(crate) fn position_from_line(&self, line: usize) -> usize {
         // SAFETY: hwnd valid; Scintilla clamps out-of-range lines to the last line.
-        unsafe {
-            SendMessageW(self.hwnd, SCI_POSITIONFROMLINE, WPARAM(line), LPARAM(0)).0 as usize
-        }
+        unsafe { SendMessageW(self.hwnd, SCI_POSITIONFROMLINE, WPARAM(line), LPARAM(0)).0 as usize }
     }
 
     // ── High-level search ─────────────────────────────────────────────────────
@@ -646,9 +695,9 @@ impl ScintillaView {
     /// Returns `true` if a match was found and selected.
     /// For backward search pass `forward = false`.
     pub(crate) fn find_next(&self, text: &[u8], flags: u32, forward: bool) -> bool {
-        let doc_len   = self.doc_len();
+        let doc_len = self.doc_len();
         let sel_start = self.selection_start();
-        let sel_end   = self.selection_end();
+        let sel_end = self.selection_end();
 
         if forward {
             // Primary: from end of selection to end of document.
@@ -700,7 +749,7 @@ impl ScintillaView {
     /// Returns the number of replacements made.
     pub(crate) fn replace_all(&self, find: &[u8], replacement: &[u8], flags: u32) -> usize {
         let mut count = 0usize;
-        let mut pos   = 0usize;
+        let mut pos = 0usize;
         self.begin_undo_action();
         loop {
             let doc_len = self.doc_len(); // recalculate: doc size changes after each replacement
@@ -709,7 +758,7 @@ impl ScintillaView {
                 None => break,
                 Some(match_start) => {
                     let repl_len = self.replace_target(replacement);
-                    pos   = match_start + repl_len;
+                    pos = match_start + repl_len;
                     count += 1;
                 }
             }

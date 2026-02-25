@@ -3,8 +3,7 @@
 use windows::Win32::{
     Foundation::HWND,
     UI::HiDpi::{
-        GetDpiForSystem, GetDpiForWindow,
-        SetProcessDpiAwarenessContext,
+        GetDpiForSystem, GetDpiForWindow, SetProcessDpiAwarenessContext,
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     },
 };
@@ -29,12 +28,20 @@ pub(crate) fn init() {
 pub(crate) fn get_for_window(hwnd: HWND) -> u32 {
     // SAFETY: hwnd is a valid window handle provided by the caller.
     let v = unsafe { GetDpiForWindow(hwnd) };
-    if v == 0 { BASE_DPI } else { v }
+    if v == 0 {
+        BASE_DPI
+    } else {
+        v
+    }
 }
 
 /// Return the primary-monitor system DPI. Used before window creation.
 pub(crate) fn get_system_dpi() -> u32 {
     // SAFETY: GetDpiForSystem takes no parameters and always succeeds on Win10+.
     let v = unsafe { GetDpiForSystem() };
-    if v == 0 { BASE_DPI } else { v }
+    if v == 0 {
+        BASE_DPI
+    } else {
+        v
+    }
 }

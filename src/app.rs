@@ -22,20 +22,20 @@ pub(crate) enum Encoding {
 impl Encoding {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Utf8    => "UTF-8",
+            Self::Utf8 => "UTF-8",
             Self::Utf16Le => "UTF-16 LE",
             Self::Utf16Be => "UTF-16 BE",
-            Self::Ansi    => "ANSI",
+            Self::Ansi => "ANSI",
         }
     }
 
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s {
-            "UTF-8"    => Some(Self::Utf8),
-            "UTF-16 LE"=> Some(Self::Utf16Le),
-            "UTF-16 BE"=> Some(Self::Utf16Be),
-            "ANSI"     => Some(Self::Ansi),
-            _          => None,
+            "UTF-8" => Some(Self::Utf8),
+            "UTF-16 LE" => Some(Self::Utf16Le),
+            "UTF-16 BE" => Some(Self::Utf16Be),
+            "ANSI" => Some(Self::Ansi),
+            _ => None,
         }
     }
 }
@@ -53,17 +53,17 @@ impl EolMode {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Crlf => "CRLF",
-            Self::Lf   => "LF",
-            Self::Cr   => "CR",
+            Self::Lf => "LF",
+            Self::Cr => "CR",
         }
     }
 
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s {
             "CRLF" => Some(Self::Crlf),
-            "LF"   => Some(Self::Lf),
-            "CR"   => Some(Self::Cr),
-            _      => None,
+            "LF" => Some(Self::Lf),
+            "CR" => Some(Self::Cr),
+            _ => None,
         }
     }
 }
@@ -76,23 +76,23 @@ impl EolMode {
 /// The matching `ScintillaView` lives in `WindowState::sci_views` at the same index.
 #[derive(Debug)]
 pub(crate) struct DocumentState {
-    pub(crate) path:      Option<PathBuf>,
-    pub(crate) encoding:  Encoding,
-    pub(crate) eol:       EolMode,
-    pub(crate) dirty:     bool,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) encoding: Encoding,
+    pub(crate) eol: EolMode,
+    pub(crate) dirty: bool,
     pub(crate) large_file: bool,
-    pub(crate) word_wrap:  bool,
+    pub(crate) word_wrap: bool,
 }
 
 impl DocumentState {
     pub(crate) fn new_untitled() -> Self {
         Self {
-            path:      None,
-            encoding:  Encoding::Utf8,
-            eol:       EolMode::Crlf,
-            dirty:     false,
+            path: None,
+            encoding: Encoding::Utf8,
+            eol: EolMode::Crlf,
+            dirty: false,
             large_file: false,
-            word_wrap:  false,
+            word_wrap: false,
         }
     }
 
@@ -122,7 +122,10 @@ pub(crate) struct App {
 impl App {
     /// Create an `App` with a single untitled document.
     pub(crate) fn new() -> Self {
-        Self { tabs: vec![DocumentState::new_untitled()], active_idx: 0 }
+        Self {
+            tabs: vec![DocumentState::new_untitled()],
+            active_idx: 0,
+        }
     }
 
     pub(crate) fn active_doc(&self) -> &DocumentState {
@@ -189,26 +192,36 @@ impl App {
     pub(crate) fn open_file(&mut self, path: PathBuf, bytes: &[u8]) -> Vec<u8> {
         let doc = self.active_doc_mut();
         doc.large_file = bytes.len() as u64 > LARGE_FILE_THRESHOLD_BYTES;
-        doc.dirty      = false;
+        doc.dirty = false;
 
         let (encoding, utf8) = Self::detect_and_decode(bytes);
         doc.encoding = encoding;
-        doc.eol      = Self::detect_eol(&utf8);
-        doc.path     = Some(path);
+        doc.eol = Self::detect_eol(&utf8);
+        doc.path = Some(path);
         utf8
     }
 
     /// Detect encoding and transcode to UTF-8.
     fn detect_and_decode(bytes: &[u8]) -> (Encoding, Vec<u8>) {
         if bytes.starts_with(&[0xFF, 0xFE]) {
-            let units: Vec<u16> = bytes[2..].chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-            return (Encoding::Utf16Le, String::from_utf16_lossy(&units).into_bytes());
+            let units: Vec<u16> = bytes[2..]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            return (
+                Encoding::Utf16Le,
+                String::from_utf16_lossy(&units).into_bytes(),
+            );
         }
         if bytes.starts_with(&[0xFE, 0xFF]) {
-            let units: Vec<u16> = bytes[2..].chunks_exact(2)
-                .map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
-            return (Encoding::Utf16Be, String::from_utf16_lossy(&units).into_bytes());
+            let units: Vec<u16> = bytes[2..]
+                .chunks_exact(2)
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect();
+            return (
+                Encoding::Utf16Be,
+                String::from_utf16_lossy(&units).into_bytes(),
+            );
         }
         if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
             return (Encoding::Utf8, bytes[3..].to_vec());
@@ -225,15 +238,30 @@ impl App {
         let mut i = 0;
         while i < utf8.len() {
             match utf8[i] {
-                b'\r' if utf8.get(i + 1) == Some(&b'\n') => { crlf += 1; i += 2; }
-                b'\r' => { cr += 1; i += 1; }
-                b'\n' => { lf += 1; i += 1; }
-                _     => { i += 1; }
+                b'\r' if utf8.get(i + 1) == Some(&b'\n') => {
+                    crlf += 1;
+                    i += 2;
+                }
+                b'\r' => {
+                    cr += 1;
+                    i += 1;
+                }
+                b'\n' => {
+                    lf += 1;
+                    i += 1;
+                }
+                _ => {
+                    i += 1;
+                }
             }
         }
-        if crlf >= lf && crlf >= cr { EolMode::Crlf }
-        else if lf >= cr            { EolMode::Lf }
-        else                        { EolMode::Cr }
+        if crlf >= lf && crlf >= cr {
+            EolMode::Crlf
+        } else if lf >= cr {
+            EolMode::Lf
+        } else {
+            EolMode::Cr
+        }
     }
 
     // ── File save ─────────────────────────────────────────────────────────────
@@ -242,15 +270,11 @@ impl App {
     ///
     /// On success, updates `active_doc().path` (for Save As) and clears
     /// `active_doc().dirty`.  The caller must call `ScintillaView::set_save_point()`.
-    pub(crate) fn save(
-        &mut self,
-        path: PathBuf,
-        utf8_content: &[u8],
-    ) -> crate::error::Result<()> {
+    pub(crate) fn save(&mut self, path: PathBuf, utf8_content: &[u8]) -> crate::error::Result<()> {
         let bytes = self.encode_for_disk(utf8_content);
         std::fs::write(&path, &bytes)?;
         let doc = self.active_doc_mut();
-        doc.path  = Some(path);
+        doc.path = Some(path);
         doc.dirty = false;
         Ok(())
     }
@@ -261,13 +285,17 @@ impl App {
             Encoding::Utf16Le => {
                 let s = String::from_utf8_lossy(utf8);
                 let mut out = vec![0xFF_u8, 0xFE];
-                for u in s.encode_utf16() { out.extend_from_slice(&u.to_le_bytes()); }
+                for u in s.encode_utf16() {
+                    out.extend_from_slice(&u.to_le_bytes());
+                }
                 out
             }
             Encoding::Utf16Be => {
                 let s = String::from_utf8_lossy(utf8);
                 let mut out = vec![0xFE_u8, 0xFF];
-                for u in s.encode_utf16() { out.extend_from_slice(&u.to_be_bytes()); }
+                for u in s.encode_utf16() {
+                    out.extend_from_slice(&u.to_be_bytes());
+                }
                 out
             }
             Encoding::Ansi => utf8.to_vec(),
@@ -296,7 +324,7 @@ mod tests {
     #[test]
     fn title_dirty_with_path() {
         let mut app = App::new();
-        app.tabs[0].path  = Some(PathBuf::from(r"C:\notes\todo.txt"));
+        app.tabs[0].path = Some(PathBuf::from(r"C:\notes\todo.txt"));
         app.tabs[0].dirty = true;
         assert_eq!(app.window_title(), "*todo.txt \u{2014} Rivet");
     }
@@ -353,7 +381,12 @@ mod tests {
 
     #[test]
     fn encoding_roundtrip_str() {
-        for enc in [Encoding::Utf8, Encoding::Utf16Le, Encoding::Utf16Be, Encoding::Ansi] {
+        for enc in [
+            Encoding::Utf8,
+            Encoding::Utf16Le,
+            Encoding::Utf16Be,
+            Encoding::Ansi,
+        ] {
             assert_eq!(Encoding::from_str(enc.as_str()), Some(enc));
         }
     }

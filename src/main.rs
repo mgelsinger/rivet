@@ -4,7 +4,6 @@
 //   • `editor::scintilla` – Scintilla child-window hosting
 // Each unsafe block in those modules MUST carry a `// SAFETY:` comment.
 #![deny(unsafe_code)]
-
 // Release builds run as a GUI application (no console window).
 // Debug builds keep the console so that eprintln! timing output is visible.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -12,11 +11,11 @@
 mod app;
 mod editor;
 mod error;
-mod languages;   // extension → Language + keyword lists
+mod languages; // extension → Language + keyword lists
 mod platform;
 mod search;
 mod session;
-mod theme;       // light / dark colour themes
+mod theme; // light / dark colour themes
 mod ui;
 
 fn main() {

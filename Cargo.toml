@@ -21,7 +21,8 @@ version  = "0.58"
 features = [
     "Win32_Foundation",            # HWND, HINSTANCE, BOOL, LRESULT, RECT, …
     "Win32_Graphics_Gdi",          # HDC, HBRUSH, painting primitives
-    "Win32_System_LibraryLoader",  # LoadLibraryW, GetProcAddress, FreeLibrary
+    "Win32_System_Diagnostics_Debug",  # MessageBeep
+    "Win32_System_LibraryLoader",      # LoadLibraryExW, GetModuleFileNameW
     "Win32_UI_Controls",           # InitCommonControlsEx, status bar (Phase 2b)
     "Win32_UI_Controls_Dialogs",   # GetOpenFileNameW, GetSaveFileNameW (Phase 3)
     "Win32_UI_HiDpi",              # SetProcessDpiAwarenessContext, GetDpiForWindow (Phase 8)

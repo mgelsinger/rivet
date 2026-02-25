@@ -19,6 +19,7 @@ pub enum RivetError {
     Io(std::io::Error),
 
     /// A file could not be decoded with the detected or requested encoding.
+    #[allow(dead_code)]
     Encoding {
         /// Human-readable description of the problem.
         detail: &'static str,
@@ -29,6 +30,7 @@ pub enum RivetError {
     /// Scintilla messages do not have structured error returns; this variant
     /// is used when a return value falls outside the documented range (e.g.
     /// an impossible position value).
+    #[allow(dead_code)]
     ScintillaMsg {
         /// The SCI_* constant (numeric value) that produced the unexpected result.
         message: u32,

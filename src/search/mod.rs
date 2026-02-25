@@ -7,6 +7,7 @@
 ///
 /// Populated from the Win32 Find / Replace dialog flags and stored so that
 /// F3 / Shift+F3 can repeat the last search without re-opening the dialog.
+#[allow(dead_code)]
 pub(crate) struct SearchOptions {
     pub(crate) text: String,
     pub(crate) match_case: bool,

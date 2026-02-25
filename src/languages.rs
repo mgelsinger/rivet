@@ -101,11 +101,12 @@ impl Language {
 /// extension.  Returns `Language::PlainText` when no match is found.
 pub(crate) fn language_from_path(path: &Path) -> Language {
     // Check extension-less special filenames first.
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        match name {
-            "Makefile" | "GNUmakefile" | "makefile" => return Language::Makefile,
-            _ => {}
-        }
+    if let Some("Makefile" | "GNUmakefile" | "makefile") = path.file_name().and_then(|n| n.to_str())
+    {
+        return Language::Makefile;
+    }
+    if let Some(".editorconfig") = path.file_name().and_then(|n| n.to_str()) {
+        return Language::Ini;
     }
 
     // Match by lowercased extension.
@@ -129,9 +130,7 @@ pub(crate) fn language_from_path(path: &Path) -> Language {
         Some("json") | Some("jsonc") => Language::Json,
         Some("sql") => Language::Sql,
         Some("toml") => Language::Toml,
-        Some("ini") | Some("cfg") | Some("conf") | Some("properties") | Some("editorconfig") => {
-            Language::Ini
-        }
+        Some("ini") | Some("cfg") | Some("conf") | Some("properties") => Language::Ini,
         Some("bat") | Some("cmd") => Language::Batch,
         Some("mk") | Some("mak") => Language::Makefile,
         Some("diff") | Some("patch") => Language::Diff,

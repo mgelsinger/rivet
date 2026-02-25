@@ -29,6 +29,7 @@ impl Encoding {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s {
             "UTF-8" => Some(Self::Utf8),
@@ -58,6 +59,7 @@ impl EolMode {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s {
             "CRLF" => Some(Self::Crlf),

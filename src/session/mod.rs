@@ -73,7 +73,7 @@ pub(crate) fn save(tabs: &[TabEntry], active_tab: usize, dark_mode: bool) -> io:
     };
 
     let file = fs::File::create(&path)?;
-    serde_json::to_writer_pretty(file, &sf).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    serde_json::to_writer_pretty(file, &sf).map_err(io::Error::other)
 }
 
 // ── Load ──────────────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ mod tests {
 
         assert_eq!(sf2.version, SESSION_VERSION);
         assert_eq!(sf2.active_tab, 1);
-        assert_eq!(sf2.dark_mode, true);
+        assert!(sf2.dark_mode);
         assert_eq!(sf2.tabs.len(), 2);
         assert_eq!(sf2.tabs[0].path, Some("C:\\foo.txt".to_owned()));
         assert_eq!(sf2.tabs[0].caret_pos, 10);

@@ -16,31 +16,32 @@
 // All accesses happen on the single UI thread.
 
 #![allow(unsafe_code)]
+#![allow(dangerous_implicit_autorefs)]
 
 use windows::{
     core::{w, PCWSTR, PWSTR},
     Win32::{
         Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH},
-        System::LibraryLoader::GetModuleHandleW,
+        Graphics::Gdi::{GetStockObject, UpdateWindow, HBRUSH, WHITE_BRUSH},
+        System::{Diagnostics::Debug::MessageBeep, LibraryLoader::GetModuleHandleW},
         UI::{
             Controls::Dialogs::{FindTextW, ReplaceTextW, FINDREPLACEW, FINDREPLACE_FLAGS},
             WindowsAndMessaging::{
                 AppendMenuW, CheckMenuItem, CreateAcceleratorTableW, CreateMenu, CreateWindowExW,
                 DefWindowProcW, DestroyWindow, DialogBoxIndirectParamW, DispatchMessageW,
-                EndDialog, GetClientRect, GetDlgItem, GetDlgItemTextW, GetMenu, GetMessage,
+                EndDialog, GetClientRect, GetDlgItem, GetDlgItemTextW, GetMenu, GetMessageW,
                 GetWindowLongPtrW, IsDialogMessageW, KillTimer, LoadCursorW, LoadIconW,
-                MessageBeep, MessageBoxW, PostQuitMessage, RegisterClassExW,
-                RegisterWindowMessageW, SendMessageW, SetDlgItemTextW, SetForegroundWindow,
-                SetMenu, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-                TranslateAcceleratorW, TranslateMessage, UpdateWindow, ACCEL, ACCEL_VIRT_FLAGS,
-                CW_USEDEFAULT, DLGTEMPLATE, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
-                HMENU, IDC_ARROW, IDI_APPLICATION, IDNO, IDYES, MB_ICONERROR, MB_ICONWARNING,
-                MB_OK, MB_YESNO, MB_YESNOCANCEL, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR,
-                MF_STRING, MF_UNCHECKED, MSG, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOW,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-                WM_INITDIALOG, WM_NOTIFY, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES,
-                WS_CHILD, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                MessageBoxW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
+                SendMessageW, SetDlgItemTextW, SetForegroundWindow, SetMenu, SetTimer,
+                SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
+                TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, CW_USEDEFAULT, DLGTEMPLATE, FCONTROL,
+                FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDC_ARROW, IDI_APPLICATION, IDNO,
+                IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MB_YESNOCANCEL,
+                MESSAGEBOX_STYLE, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+                MF_UNCHECKED, MSG, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOW, WINDOW_EX_STYLE,
+                WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_INITDIALOG,
+                WM_NOTIFY, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD,
+                WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
     },
@@ -161,6 +162,7 @@ const TCIF_TEXT: u32 = 0x0001;
 /// `#[repr(C)]` guarantees the layout matches what `SendMessageW(TCM_INSERTITEMW)`
 /// expects.  The fields follow the C declaration order exactly.
 #[repr(C)]
+#[allow(clippy::upper_case_acronyms)]
 struct TCITEMW {
     mask: u32,
     dw_state: u32,
@@ -227,6 +229,7 @@ struct WindowState {
     /// Heap-stable UTF-16 buffer for the Find text (pointed to by `findreplace`).
     find_buf: Box<[u16; 512]>,
     /// Heap-stable UTF-16 buffer for the Replace text.
+    #[allow(dead_code)]
     replace_buf: Box<[u16; 512]>,
     /// Shared `FINDREPLACEW` struct — passed to `FindTextW` / `ReplaceTextW`.
     /// Its `lpstrFindWhat` and `lpstrReplaceWith` pointers into the boxes above
@@ -371,11 +374,8 @@ fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
             hinstance,
             None,
         )
-    };
-
-    if hwnd == HWND::default() {
-        return Err(last_error("CreateWindowExW"));
     }
+    .map_err(RivetError::from)?;
 
     let menu = build_menu()?;
     // SAFETY: hwnd and menu are valid handles.
@@ -412,10 +412,8 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
             hinstance,
             None,
         )
-    };
-    if hwnd_tab == HWND::default() {
-        return Err(last_error("CreateWindowExW (tab bar)"));
     }
+    .map_err(RivetError::from)?;
 
     // ── Scintilla view (initial tab) ──────────────────────────────────────────
     let sci = ScintillaView::create(hwnd_parent, hinstance, &sci_dll)?;
@@ -439,10 +437,8 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
             hinstance,
             None,
         )
-    };
-    if hwnd_status == HWND::default() {
-        return Err(last_error("CreateWindowExW (status bar)"));
     }
+    .map_err(RivetError::from)?;
 
     let app = App::new();
 
@@ -839,9 +835,9 @@ fn create_accelerators() -> Result<HACCEL> {
 fn message_loop(hwnd: HWND, haccel: HACCEL) -> Result<()> {
     let mut msg = MSG::default();
     loop {
-        let ret = unsafe { GetMessage(&mut msg, HWND::default(), 0, 0) };
+        let ret = unsafe { GetMessageW(&mut msg, HWND::default(), 0, 0) };
         match ret.0 {
-            -1 => return Err(last_error("GetMessage")),
+            -1 => return Err(last_error("GetMessageW")),
             0 => break,
             _ => unsafe {
                 // Give the modeless Find/Replace dialog first crack at keyboard
@@ -1698,7 +1694,7 @@ unsafe fn handle_findreplace_msg(hwnd: HWND, lparam: LPARAM, state: &mut WindowS
 
     if flags & FR_FINDNEXT != 0 {
         if !sci.find_next(&find_bytes, sci_flags, forward) {
-            let _ = MessageBeep(!0u32);
+            let _ = MessageBeep(MESSAGEBOX_STYLE(0xFFFF_FFFF));
         }
     } else if flags & FR_REPLACE != 0 {
         let repl_bytes = pwstr_to_utf8(fr.lpstrReplaceWith);
@@ -1737,7 +1733,7 @@ unsafe fn handle_replace_once(
 
     // Advance to the next match.
     if !sci.find_next(find, flags, forward) {
-        let _ = MessageBeep(!0u32);
+        let _ = MessageBeep(MESSAGEBOX_STYLE(0xFFFF_FFFF));
     }
 }
 
@@ -1773,7 +1769,7 @@ unsafe fn handle_find_next(hwnd: HWND, state: &mut WindowState, forward: bool) {
 
     let idx = state.app.active_idx;
     if !state.sci_views[idx].find_next(&find_bytes, sci_flags, forward) {
-        let _ = MessageBeep(!0u32);
+        let _ = MessageBeep(MESSAGEBOX_STYLE(0xFFFF_FFFF));
     }
 }
 
@@ -1888,7 +1884,7 @@ unsafe extern "system" fn goto_dlg_proc(
                     };
 
                     let mut buf = [0u16; 32];
-                    let len = GetDlgItemTextW(hwnd, EDIT_ID, PWSTR(buf.as_mut_ptr()), 32);
+                    let len = GetDlgItemTextW(hwnd, EDIT_ID, &mut buf);
                     let s = String::from_utf16_lossy(&buf[..len as usize]);
                     match s.trim().parse::<usize>() {
                         Ok(n) if n >= 1 && n <= total => {
@@ -1896,7 +1892,7 @@ unsafe extern "system" fn goto_dlg_proc(
                         }
                         _ => {
                             // Invalid input — beep and keep the dialog open.
-                            let _ = MessageBeep(!0u32);
+                            let _ = MessageBeep(MESSAGEBOX_STYLE(0xFFFF_FFFF));
                         }
                     }
                     0
@@ -2068,12 +2064,9 @@ unsafe fn pwstr_to_utf8(pwstr: PWSTR) -> Vec<u8> {
 
 // ── Status bar / title ────────────────────────────────────────────────────────
 
-/// Refresh all three status-bar parts from the current `WindowState`.
-///
-/// Parts:  0 = encoding  |  1 = EOL mode  |  2 = Ln / Col
-///
-/// # Safety
-/// `state.hwnd_status` and the active sci_view must be valid.
+// Refresh all three status-bar parts from the current `WindowState`.
+// Parts:  0 = encoding  |  1 = EOL mode  |  2 = Ln / Col
+// Safety: `state.hwnd_status` and the active sci_view must be valid.
 // ── Syntax highlighting ────────────────────────────────────────────────────────
 
 /// Apply the language lexer and colour theme to `sci` based on `doc`.

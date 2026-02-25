@@ -40,11 +40,11 @@ use messages::{
 };
 
 use windows::{
-    core::{PCWSTR, PWSTR},
+    core::PCWSTR,
     Win32::{
-        Foundation::{GetLastError, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, WPARAM},
+        Foundation::{FreeLibrary, GetLastError, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, WPARAM},
         System::LibraryLoader::{
-            FreeLibrary, GetModuleFileNameW, LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH,
+            GetModuleFileNameW, LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH,
         },
         UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, SendMessageW, ShowWindow, HMENU, SW_HIDE, SW_SHOW,
@@ -84,13 +84,7 @@ impl SciDll {
             let mut buf = vec![0u16; 32_768];
             // SAFETY: buf is large enough for any Windows path; passing
             // HMODULE::default() (NULL) retrieves the calling process's exe path.
-            let len = unsafe {
-                GetModuleFileNameW(
-                    HMODULE::default(),
-                    PWSTR(buf.as_mut_ptr()),
-                    buf.len() as u32,
-                )
-            };
+            let len = unsafe { GetModuleFileNameW(HMODULE::default(), &mut buf) };
             if len == 0 {
                 // SAFETY: GetLastError reads thread-local state set by the
                 // just-failed GetModuleFileNameW; no Win32 calls between them.
@@ -177,17 +171,8 @@ impl ScintillaView {
                 hinstance,
                 None,
             )
-        };
-
-        if hwnd == HWND::default() {
-            // SAFETY: GetLastError reads thread-local state set by the just-
-            // failed CreateWindowExW; no Win32 calls between them.
-            let code = unsafe { GetLastError().0 };
-            return Err(RivetError::Win32 {
-                function: "CreateWindowExW (Scintilla)",
-                code,
-            });
         }
+        .map_err(RivetError::from)?;
 
         // SAFETY: hwnd is a valid Scintilla window.  SCI_SETCODEPAGE with
         // SC_CP_UTF8 is documented safe initialisation.

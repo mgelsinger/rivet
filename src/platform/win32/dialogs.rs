@@ -106,5 +106,5 @@ pub(crate) fn show_save_dialog(hwnd_owner: HWND, default_name: &str) -> Option<P
 /// Convert a null-terminated UTF-16 buffer to a `PathBuf`.
 fn path_from_buf(buf: &[u16]) -> PathBuf {
     let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    PathBuf::from(String::from_utf16_lossy(&buf[..len]).as_ref())
+    PathBuf::from(String::from_utf16_lossy(&buf[..len]).as_str())
 }

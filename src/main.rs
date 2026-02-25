@@ -12,9 +12,11 @@
 mod app;
 mod editor;
 mod error;
+mod languages;   // extension → Language + keyword lists
 mod platform;
 mod search;
 mod session;
+mod theme;       // light / dark colour themes
 mod ui;
 
 fn main() {

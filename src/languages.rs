@@ -5,12 +5,6 @@
 
 use std::path::Path;
 
-// Import SCLEX_* constants from the scintilla messages module.
-use crate::editor::scintilla::messages::{
-    SCLEX_BASH, SCLEX_BATCH, SCLEX_CPP, SCLEX_CSS, SCLEX_DIFF, SCLEX_HTML, SCLEX_JSON,
-    SCLEX_MAKEFILE, SCLEX_MARKDOWN, SCLEX_NULL, SCLEX_POWERSHELL, SCLEX_PROPERTIES, SCLEX_PYTHON,
-    SCLEX_RUST, SCLEX_SQL, SCLEX_TOML, SCLEX_XML, SCLEX_YAML,
-};
 
 // ── Language enum ─────────────────────────────────────────────────────────────
 
@@ -40,30 +34,32 @@ pub(crate) enum Language {
 }
 
 impl Language {
-    /// Scintilla lexer ID for this language.
-    pub(crate) fn lexer_id(self) -> usize {
+    /// Null-terminated ASCII name for Lexilla's `CreateLexer()`.
+    ///
+    /// `PlainText` is never passed to `CreateLexer`; callers use `null` directly.
+    /// If `CreateLexer` returns null for an unrecognised name (e.g. an older
+    /// Lexilla that lacks the TOML lexer), passing null to `set_ilexer` simply
+    /// disables highlighting for that file — a safe fallback.
+    pub(crate) fn lexer_name(self) -> &'static [u8] {
         match self {
-            Language::PlainText => SCLEX_NULL,
-            Language::C => SCLEX_CPP,
-            Language::Cpp => SCLEX_CPP,
-            Language::JavaScript => SCLEX_CPP,
-            Language::TypeScript => SCLEX_CPP,
-            Language::Python => SCLEX_PYTHON,
-            Language::Rust => SCLEX_RUST,
-            Language::Html => SCLEX_HTML,
-            Language::Xml => SCLEX_XML,
-            Language::Css => SCLEX_CSS,
-            Language::Json => SCLEX_JSON,
-            Language::Sql => SCLEX_SQL,
-            Language::Toml => SCLEX_TOML,
-            Language::Ini => SCLEX_PROPERTIES,
-            Language::Batch => SCLEX_BATCH,
-            Language::Makefile => SCLEX_MAKEFILE,
-            Language::Diff => SCLEX_DIFF,
-            Language::Shell => SCLEX_BASH,
-            Language::Markdown => SCLEX_MARKDOWN,
-            Language::Yaml => SCLEX_YAML,
-            Language::PowerShell => SCLEX_POWERSHELL,
+            Language::PlainText => b"\0",
+            Language::C | Language::Cpp | Language::JavaScript | Language::TypeScript => b"cpp\0",
+            Language::Python => b"python\0",
+            Language::Rust => b"rust\0",
+            Language::Html => b"hypertext\0",
+            Language::Xml => b"xml\0",
+            Language::Css => b"css\0",
+            Language::Json => b"json\0",
+            Language::Sql => b"sql\0",
+            Language::Toml => b"toml\0",
+            Language::Ini => b"props\0",
+            Language::Batch => b"batch\0",
+            Language::Makefile => b"makefile\0",
+            Language::Diff => b"diff\0",
+            Language::Shell => b"bash\0",
+            Language::Markdown => b"markdown\0",
+            Language::Yaml => b"yaml\0",
+            Language::PowerShell => b"powershell\0",
         }
     }
 

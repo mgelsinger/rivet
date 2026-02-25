@@ -24,30 +24,9 @@ pub(super) const SCI_SETSAVEPOINT: u32 = 2014;
 
 // ── Lexer / Large File Mode ───────────────────────────────────────────────────
 
-/// Set lexer by numeric ID.
-pub(super) const SCI_SETLEXER: u32 = 4001;
-/// Plain-text lexer (no highlighting).
-pub(crate) const SCLEX_NULL: usize = 1;
-
-// ── SCLEX_* lexer IDs (Scintilla 5.x SciLexer.h) ─────────────────────────────
-
-pub(crate) const SCLEX_CPP: usize = 3;
-pub(crate) const SCLEX_HTML: usize = 4;
-pub(crate) const SCLEX_XML: usize = 5;
-pub(crate) const SCLEX_PYTHON: usize = 2;
-pub(crate) const SCLEX_SQL: usize = 7;
-pub(crate) const SCLEX_PROPERTIES: usize = 9;
-pub(crate) const SCLEX_MAKEFILE: usize = 11;
-pub(crate) const SCLEX_BATCH: usize = 12;
-pub(crate) const SCLEX_DIFF: usize = 16;
-pub(crate) const SCLEX_CSS: usize = 38;
-pub(crate) const SCLEX_YAML: usize = 48;
-pub(crate) const SCLEX_BASH: usize = 62;
-pub(crate) const SCLEX_POWERSHELL: usize = 88;
-pub(crate) const SCLEX_MARKDOWN: usize = 98;
-pub(crate) const SCLEX_RUST: usize = 111;
-pub(crate) const SCLEX_TOML: usize = 131; // requires Scintilla ≥ 5.3; falls back to plain text on 5.2
-pub(crate) const SCLEX_JSON: usize = 150;
+/// Set lexer via ILexer5* (Scintilla 5.x / Lexilla).
+/// WPARAM = 0; LPARAM = ILexer5* from Lexilla CreateLexer(), or 0 for plain text.
+pub(super) const SCI_SETILEXER: u32 = 4033;
 
 // ── Style operation messages ───────────────────────────────────────────────────
 

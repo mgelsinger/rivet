@@ -15,12 +15,14 @@
 //      as part of parent-window teardown before WM_DESTROY fired); no-op drop
 //   3. `sci_dll` — `FreeLibrary` called here, after all windows are gone ✓
 //
-// ── Security note ─────────────────────────────────────────────────────────────
+// ── Embedded DLL (Phase 10) ───────────────────────────────────────────────────
 //
-// `SciDll::load()` calls `LoadLibraryExW` with the absolute path to
-// `SciLexer.dll` inside the application directory (resolved via
-// `GetModuleFileNameW`).  `LOAD_WITH_ALTERED_SEARCH_PATH` ensures Windows
-// loads exactly that file and never falls back to CWD or PATH.
+// `SciLexer.dll` is embedded at compile time via `include_bytes!` from
+// `vendor/SciLexer.dll`.  On first use `SciDll::load()` extracts it to
+// `%TEMP%\rivet\SciLexer.dll` and loads from that absolute path with
+// `LOAD_WITH_ALTERED_SEARCH_PATH`, preventing DLL hijacking.  The extraction
+// is skipped silently if the file is already present (e.g. a second instance),
+// and the app still loads the existing copy successfully.
 
 #![allow(unsafe_code)]
 
@@ -32,20 +34,20 @@ use messages::{
     SCI_GETSELECTIONSTART, SCI_GETTARGETEND, SCI_GETTEXT, SCI_GETWRAPMODE, SCI_GOTOPOS,
     SCI_LINEFROMPOSITION, SCI_POSITIONFROMLINE, SCI_REDO, SCI_REPLACETARGET, SCI_SCROLLCARET,
     SCI_SEARCHINTARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETEOLMODE, SCI_SETFIRSTVISIBLELINE,
-    SCI_SETKEYWORDS, SCI_SETLEXER, SCI_SETSAVEPOINT, SCI_SETSEARCHFLAGS, SCI_SETSEL,
+    SCI_SETKEYWORDS, SCI_SETILEXER, SCI_SETSAVEPOINT, SCI_SETSEARCHFLAGS, SCI_SETSEL,
     SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETWRAPMODE, SCI_STYLECLEARALL,
     SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETSIZE,
-    SCLEX_NULL, SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_WRAP_NONE, SC_WRAP_WORD,
+    SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_WRAP_NONE, SC_WRAP_WORD,
     WM_CLEAR, WM_COPY, WM_CUT, WM_PASTE, WM_UNDO,
 };
 
+use std::os::windows::ffi::OsStrExt as _;
+
 use windows::{
-    core::PCWSTR,
+    core::{s, PCWSTR},
     Win32::{
         Foundation::{FreeLibrary, GetLastError, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, WPARAM},
-        System::LibraryLoader::{
-            GetModuleFileNameW, LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH,
-        },
+        System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH},
         UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, SendMessageW, ShowWindow, HMENU, SW_HIDE, SW_SHOW,
             WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPSIBLINGS,
@@ -60,71 +62,108 @@ use crate::{
 
 // ── DLL identity ──────────────────────────────────────────────────────────────
 
-const DLL_NAME: &str = "SciLexer.dll";
 const CLASS_NAME: &str = "Scintilla";
+
+/// `Scintilla.dll` bytes embedded at compile time from `vendor/Scintilla.dll`.
+static SCINTILLA_BYTES: &[u8] = include_bytes!("../../../vendor/Scintilla.dll");
+
+/// `Lexilla.dll` bytes embedded at compile time from `vendor/Lexilla.dll`.
+static LEXILLA_BYTES: &[u8] = include_bytes!("../../../vendor/Lexilla.dll");
+
+/// Signature of Lexilla's `CreateLexer` C export.
+type CreateLexerFn = unsafe extern "C" fn(*const u8) -> *mut std::ffi::c_void;
 
 // ── SciDll ────────────────────────────────────────────────────────────────────
 
-/// RAII handle to the loaded `SciLexer.dll`.
+/// RAII handles to the loaded `Scintilla.dll` and `Lexilla.dll`.
 ///
-/// Loading the DLL causes it to register the `"Scintilla"` window class.
-/// `FreeLibrary` is called on `Drop`, which should happen after all
-/// `ScintillaView` child windows have been destroyed.
-pub(crate) struct SciDll(HMODULE);
+/// Loading `Scintilla.dll` registers the `"Scintilla"` window class.
+/// `Lexilla.dll` provides the `CreateLexer` function for syntax highlighting.
+/// Both are freed on `Drop`, after all `ScintillaView` child windows are gone.
+pub(crate) struct SciDll {
+    scintilla: HMODULE,
+    lexilla: HMODULE,
+    create_lexer_fn: CreateLexerFn,
+}
 
 impl SciDll {
-    /// Load `SciLexer.dll` from the application directory.
+    /// Extract and load `Scintilla.dll` + `Lexilla.dll` from embedded bytes.
     ///
-    /// This also registers the `"Scintilla"` Win32 window class, making it
-    /// available for `ScintillaView::create`.
+    /// Both DLLs are written to `%TEMP%\rivet\` on first run.  A second
+    /// running instance silently skips the write (file already present) and
+    /// loads the existing copy.  Loading registers the `"Scintilla"` class and
+    /// resolves `CreateLexer`, making `ScintillaView::create` usable.
     pub(crate) fn load() -> Result<Self> {
-        // Build an absolute path: <exe-dir>\SciLexer.dll
-        let full_path = {
-            // MAX_PATH is 260 wide chars; 32 768 covers all extended-length paths.
-            let mut buf = vec![0u16; 32_768];
-            // SAFETY: buf is large enough for any Windows path; passing
-            // HMODULE::default() (NULL) retrieves the calling process's exe path.
-            let len = unsafe { GetModuleFileNameW(HMODULE::default(), &mut buf) };
-            if len == 0 {
-                // SAFETY: GetLastError reads thread-local state set by the
-                // just-failed GetModuleFileNameW; no Win32 calls between them.
-                return Err(RivetError::Win32 {
-                    function: "GetModuleFileNameW",
-                    code: unsafe { GetLastError().0 },
-                });
-            }
-            buf.truncate(len as usize);
-            // Strip the exe filename, keeping the trailing backslash.
-            if let Some(sep) = buf.iter().rposition(|&c| c == b'\\' as u16) {
-                buf.truncate(sep + 1);
-            }
-            buf.extend(DLL_NAME.encode_utf16().chain(std::iter::once(0)));
-            buf
+        let dir = {
+            let mut d = std::env::temp_dir();
+            d.push("rivet");
+            let _ = std::fs::create_dir_all(&d);
+            d
         };
 
-        // SAFETY: full_path is a valid null-terminated UTF-16 absolute path.
-        // LOAD_WITH_ALTERED_SEARCH_PATH + absolute path: only the given file is
-        // attempted; CWD and PATH are never searched, preventing DLL hijacking.
-        let dll = unsafe {
-            LoadLibraryExW(
-                PCWSTR(full_path.as_ptr()),
-                HANDLE::default(),
-                LOAD_WITH_ALTERED_SEARCH_PATH,
-            )
-        }
-        .map_err(RivetError::from)?;
-        Ok(Self(dll))
+        // Extract both DLLs; ignore write errors (another instance may hold them).
+        let _ = std::fs::write(dir.join("Scintilla.dll"), SCINTILLA_BYTES);
+        let _ = std::fs::write(dir.join("Lexilla.dll"), LEXILLA_BYTES);
+
+        let scintilla = load_dll_from_dir(&dir, "Scintilla.dll")?;
+        let lexilla = load_dll_from_dir(&dir, "Lexilla.dll")?;
+
+        // Resolve CreateLexer from Lexilla.
+        // SAFETY: lexilla is a valid HMODULE; "CreateLexer\0" is a valid PCSTR.
+        let proc = unsafe { GetProcAddress(lexilla, s!("CreateLexer")) }.ok_or(
+            RivetError::Win32 {
+                function: "GetProcAddress(CreateLexer)",
+                // SAFETY: called immediately after GetProcAddress failure.
+                code: unsafe { GetLastError().0 },
+            },
+        )?;
+        // SAFETY: CreateLexer is exported from Lexilla with this exact C signature.
+        // On x64 Windows, extern "system" and extern "C" share the same ABI.
+        let create_lexer_fn: CreateLexerFn = unsafe { std::mem::transmute(proc) };
+
+        Ok(Self { scintilla, lexilla, create_lexer_fn })
     }
+
+    /// Call Lexilla's `CreateLexer` with a null-terminated ASCII name (e.g. `b"cpp\0"`).
+    ///
+    /// Returns a null pointer if the lexer name is unrecognised; callers pass
+    /// the result straight to `ScintillaView::set_ilexer`, which treats null as
+    /// "plain text / no highlighting".
+    pub(crate) fn create_lexer(&self, name: &[u8]) -> *mut std::ffi::c_void {
+        // SAFETY: create_lexer_fn is valid; name is a null-terminated ASCII slice.
+        unsafe { (self.create_lexer_fn)(name.as_ptr()) }
+    }
+}
+
+/// Load a DLL by filename from an absolute directory path using
+/// `LOAD_WITH_ALTERED_SEARCH_PATH` to prevent DLL hijacking.
+fn load_dll_from_dir(dir: &std::path::Path, name: &str) -> Result<HMODULE> {
+    let path_wide: Vec<u16> = dir
+        .join(name)
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: path_wide is a valid null-terminated UTF-16 absolute path.
+    unsafe {
+        LoadLibraryExW(
+            PCWSTR(path_wide.as_ptr()),
+            HANDLE::default(),
+            LOAD_WITH_ALTERED_SEARCH_PATH,
+        )
+    }
+    .map_err(RivetError::from)
 }
 
 impl Drop for SciDll {
     fn drop(&mut self) {
-        // SAFETY: self.0 was returned by a successful LoadLibraryW and has not
-        // been freed since.  All ScintillaView HWNDs are already destroyed
+        // SAFETY: both HMODULEs came from successful LoadLibraryExW calls and
+        // have not been freed.  All ScintillaView HWNDs are already destroyed
         // (Windows destroys child windows before WM_DESTROY fires on the parent,
         // and WindowState field order ensures sci_views drops before sci_dll).
         unsafe {
-            let _ = FreeLibrary(self.0);
+            let _ = FreeLibrary(self.lexilla);
+            let _ = FreeLibrary(self.scintilla);
         }
     }
 }
@@ -262,7 +301,8 @@ impl ScintillaView {
         if enable {
             // SAFETY: hwnd valid; documented Scintilla messages.
             unsafe {
-                let _ = SendMessageW(self.hwnd, SCI_SETLEXER, WPARAM(SCLEX_NULL), LPARAM(0));
+                // Null ILexer5* = plain text, no highlighting.
+                let _ = SendMessageW(self.hwnd, SCI_SETILEXER, WPARAM(0), LPARAM(0));
                 let _ = SendMessageW(self.hwnd, SCI_SETWRAPMODE, WPARAM(SC_WRAP_NONE), LPARAM(0));
             }
         }
@@ -270,11 +310,13 @@ impl ScintillaView {
 
     // ── Syntax highlighting ───────────────────────────────────────────────────
 
-    /// Set the Scintilla lexer by numeric SCLEX_* ID.
-    pub(crate) fn set_lexer(&self, lexer_id: usize) {
-        // SAFETY: hwnd valid; SCI_SETLEXER with a valid SCLEX_* ID is documented.
+    /// Set the lexer via Lexilla's `ILexer5*` interface (Scintilla 5.x).
+    ///
+    /// Pass a pointer returned by `SciDll::create_lexer`, or `null` for plain text.
+    pub(crate) fn set_ilexer(&self, lexer: *mut std::ffi::c_void) {
+        // SAFETY: hwnd valid; SCI_SETILEXER with an ILexer5* (or null) is documented.
         unsafe {
-            let _ = SendMessageW(self.hwnd, SCI_SETLEXER, WPARAM(lexer_id), LPARAM(0));
+            let _ = SendMessageW(self.hwnd, SCI_SETILEXER, WPARAM(0), LPARAM(lexer as isize));
         }
     }
 

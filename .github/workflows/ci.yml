@@ -112,18 +112,14 @@ jobs:
 
           INSTALLATION
           ------------
-          1. Copy rivet.exe to any folder.
-          2. Download SciLexer.dll (Scintilla v5.x) from https://www.scintilla.org/
-             and place it in the same folder as rivet.exe.
-          3. Run rivet.exe.
-
-          SciLexer.dll is not bundled here; it must come from the official
-          Scintilla distribution to ensure authenticity and correct version matching.
+          Copy rivet.exe to any folder and run it.  No installer required.
+          SciLexer.dll (Scintilla) is embedded inside rivet.exe and extracted
+          automatically to your TEMP folder on first launch.
 
           LICENSE
           -------
-          MIT OR Apache-2.0
-          See LICENSE-MIT and LICENSE-APACHE in the source repository.
+          MIT OR Apache-2.0  (Rivet)
+          LGPL 2.0           (Scintilla / SciLexer.dll — https://www.scintilla.org/)
           "@ | Out-File -Encoding UTF8 "$dir\README-INSTALL.txt"
           Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip"
 

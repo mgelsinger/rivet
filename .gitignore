@@ -1,6 +1,9 @@
 # Rust build output
 /target/
 
+# vendor/ contains SciLexer.dll (committed to repo; embedded into the binary at compile time)
+# Do NOT add vendor/ here.
+
 # Cargo lock is committed for binaries (not libraries)
 # Cargo.lock intentionally tracked
 

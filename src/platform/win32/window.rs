@@ -489,7 +489,7 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
         hwnd_tab,
         hwnd_status,
         dpi: crate::platform::win32::dpi::BASE_DPI,
-        dark_mode: false,
+        dark_mode: true,
         find_buf,
         replace_buf,
         findreplace,
@@ -528,6 +528,8 @@ unsafe fn layout_children(state: &WindowState, client_width: i32, client_height:
 
     // Zone 3: status bar — self-repositions when it receives WM_SIZE.
     let _ = SendMessageW(state.hwnd_status, WM_SIZE, WPARAM(0), LPARAM(0));
+    // Re-anchor the right-side panels now that the status bar has its new width.
+    update_statusbar_parts(state);
     let mut sr = RECT::default();
     let _ = GetClientRect(state.hwnd_status, &mut sr);
     let status_h = sr.bottom;
@@ -1329,9 +1331,10 @@ unsafe fn load_file_into_active_tab(
         &state.sci_views[idx],
         state.app.active_doc(),
         state.dark_mode,
+        &state.sci_dll,
     );
     state.sci_views[idx].set_eol_mode(eol);
-    state.sci_views[idx].set_word_wrap(false); // always off on open; user toggles explicitly
+    state.sci_views[idx].set_word_wrap(true);
     state.sci_views[idx].set_text(&utf8);
     state.sci_views[idx].set_save_point();
     sync_tab_label(state, idx);
@@ -1375,9 +1378,10 @@ unsafe fn open_file_in_new_tab(
         &state.sci_views[new_idx],
         state.app.active_doc(),
         state.dark_mode,
+        &state.sci_dll,
     );
     state.sci_views[new_idx].set_eol_mode(eol);
-    state.sci_views[new_idx].set_word_wrap(false); // always off on open; user toggles explicitly
+    state.sci_views[new_idx].set_word_wrap(true);
     state.sci_views[new_idx].set_text(&utf8);
     state.sci_views[new_idx].set_save_point();
 
@@ -1415,6 +1419,7 @@ unsafe fn open_untitled_tab(hwnd: HWND, state: &mut WindowState) {
         &state.sci_views[new_idx],
         state.app.active_doc(),
         state.dark_mode,
+        &state.sci_dll,
     );
 
     state.sci_views[new_idx].show(true);
@@ -1544,23 +1549,45 @@ unsafe fn update_wrap_checkmark(hwnd: HWND, wrap: bool) {
 /// `hwnd` must be the valid main-window handle; `state` must be live.
 unsafe fn post_create_init(hwnd: HWND, state: &mut WindowState) {
     state.dpi = crate::platform::win32::dpi::get_for_window(hwnd);
-    if state.dpi != crate::platform::win32::dpi::BASE_DPI {
-        update_statusbar_parts(state);
-    }
+    update_statusbar_parts(state);
+    // Apply initial dark mode chrome and menu checkmark.
+    apply_title_bar_dark(hwnd, state.dark_mode);
+    update_dark_mode_checkmark(hwnd, state.dark_mode);
     // Apply Consolas font + initial palette to the first untitled tab.
-    apply_highlighting(&state.sci_views[0], state.app.active_doc(), state.dark_mode);
+    apply_highlighting(&state.sci_views[0], state.app.active_doc(), state.dark_mode, &state.sci_dll);
     // Start the periodic session checkpoint timer.
     // SAFETY: hwnd is valid; no callback (None) — the timer fires as WM_TIMER.
     let _ = SetTimer(hwnd, AUTOSAVE_TIMER_ID, AUTOSAVE_INTERVAL_MS, None);
 }
 
-/// Recompute and apply DPI-scaled status-bar part widths.
+/// Recompute and apply status-bar part widths.
+///
+/// Fixed-width panels (language, EOL, encoding) are right-anchored by computing
+/// their right edges from the actual status-bar client width.  The Ln/Col panel
+/// fills whatever space remains on the left.  Call this after every resize and
+/// DPI change so the layout is always pixel-perfect regardless of window size.
 fn update_statusbar_parts(state: &WindowState) {
     use crate::platform::win32::dpi;
-    let enc = dpi::scale(SB_PART_ENCODING_W_BASE, state.dpi);
-    let eol = dpi::scale(SB_PART_EOL_W_BASE, state.dpi);
-    let lang = dpi::scale(SB_PART_LANG_W_BASE, state.dpi);
-    let parts: [i32; 4] = [enc, enc + eol, enc + eol + lang, -1];
+    let enc_w = dpi::scale(SB_PART_ENCODING_W_BASE, state.dpi);
+    let eol_w = dpi::scale(SB_PART_EOL_W_BASE, state.dpi);
+    let lang_w = dpi::scale(SB_PART_LANG_W_BASE, state.dpi);
+
+    // Query the current status-bar width so right edges are always accurate.
+    let total = {
+        let mut rc = RECT::default();
+        // SAFETY: hwnd_status is a valid window handle for the life of WindowState.
+        unsafe { let _ = GetClientRect(state.hwnd_status, &mut rc); }
+        rc.right
+    };
+
+    // Layout (left → right): [Ln/Col] | [Language] | [EOL] | [Encoding]
+    // The last part uses -1 so Windows extends it to the right edge, accounting
+    // for the sizing grip.
+    let eol_right  = (total - enc_w).max(1);
+    let lang_right = (total - enc_w - eol_w).max(1);
+    let col_right  = (total - enc_w - eol_w - lang_w).max(1);
+    let parts: [i32; 4] = [col_right, lang_right, eol_right, -1];
+
     // SAFETY: hwnd_status is a valid status-bar HWND for the lifetime of WindowState.
     unsafe {
         let _ = SendMessageW(
@@ -1615,7 +1642,7 @@ fn apply_title_bar_dark(hwnd: HWND, dark: bool) {
 /// Re-apply highlighting (with the current `dark_mode` flag) to every open tab.
 fn reapply_all_themes(state: &mut WindowState) {
     for i in 0..state.app.tabs.len() {
-        apply_highlighting(&state.sci_views[i], &state.app.tabs[i], state.dark_mode);
+        apply_highlighting(&state.sci_views[i], &state.app.tabs[i], state.dark_mode, &state.sci_dll);
     }
 }
 
@@ -2073,7 +2100,12 @@ unsafe fn pwstr_to_utf8(pwstr: PWSTR) -> Vec<u8> {
 ///
 /// Skipped for large files (`doc.large_file == true`) — they stay with
 /// `SCLEX_NULL` (plain text) which is already set by `set_large_file_mode`.
-fn apply_highlighting(sci: &ScintillaView, doc: &crate::app::DocumentState, dark: bool) {
+fn apply_highlighting(
+    sci: &ScintillaView,
+    doc: &crate::app::DocumentState,
+    dark: bool,
+    sci_dll: &crate::editor::scintilla::SciDll,
+) {
     if doc.large_file {
         return;
     }
@@ -2081,7 +2113,11 @@ fn apply_highlighting(sci: &ScintillaView, doc: &crate::app::DocumentState, dark
         Some(p) => crate::languages::language_from_path(p),
         None => crate::languages::Language::PlainText,
     };
-    sci.set_lexer(lang.lexer_id());
+    let lexer_ptr = match lang {
+        crate::languages::Language::PlainText => std::ptr::null_mut(),
+        _ => sci_dll.create_lexer(lang.lexer_name()),
+    };
+    sci.set_ilexer(lexer_ptr);
     for (set_idx, words) in crate::languages::keywords(lang) {
         sci.set_keywords(*set_idx, words);
     }
@@ -2109,8 +2145,13 @@ unsafe fn update_status_bar(state: &WindowState) {
     } else {
         lang.display_name().to_owned()
     };
-    // Parts: 0=encoding, 1=EOL, 2=Ln/Col, 3=language
-    let texts: [String; 4] = [enc, eol, format!("Ln {line}, Col {col}"), lang_text];
+    // Parts (left → right): 0=Ln/Col, 1=language, 2=EOL, 3=encoding
+    let texts: [String; 4] = [
+        format!(" Ln {line}, Col {col}"),
+        format!(" {lang_text}"),
+        format!(" {eol}"),
+        format!(" {enc}"),
+    ];
     for (i, text) in texts.iter().enumerate() {
         let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         let _ = SendMessageW(
@@ -2177,9 +2218,9 @@ unsafe fn handle_close_tab(hwnd: HWND, state: &mut WindowState, idx: usize) {
         doc.large_file = false;
         doc.encoding = crate::app::Encoding::Utf8;
         doc.eol = crate::app::EolMode::Crlf;
-        doc.word_wrap = false;
+        doc.word_wrap = true;
         state.sci_views[0].set_eol_mode(crate::app::EolMode::Crlf);
-        state.sci_views[0].set_word_wrap(false);
+        state.sci_views[0].set_word_wrap(true);
         state.sci_views[0].set_text(b"");
         state.sci_views[0].set_save_point();
         update_wrap_checkmark(hwnd, false);
@@ -2338,12 +2379,11 @@ unsafe fn restore_session(hwnd: HWND, state: &mut WindowState) {
     };
 
     // Restore dark mode BEFORE loading files so each apply_highlighting call
-    // uses the correct palette.
-    if sf.dark_mode {
-        state.dark_mode = true;
-        apply_title_bar_dark(hwnd, true);
-        update_dark_mode_checkmark(hwnd, true);
-    }
+    // uses the correct palette.  Always apply so light-mode sessions override
+    // the dark-mode default set in post_create_init.
+    state.dark_mode = sf.dark_mode;
+    apply_title_bar_dark(hwnd, sf.dark_mode);
+    update_dark_mode_checkmark(hwnd, sf.dark_mode);
 
     let mut opened_any = false;
 

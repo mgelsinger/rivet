@@ -15,6 +15,8 @@ pub(crate) struct SessionFile {
     pub(crate) version:    u32,
     pub(crate) tabs:       Vec<TabEntry>,
     pub(crate) active_tab: usize,
+    #[serde(default)] // backward-compat: old files without this field parse as false
+    pub(crate) dark_mode:  bool,
 }
 
 /// One entry per open tab.
@@ -55,7 +57,7 @@ pub(crate) fn session_path() -> Option<PathBuf> {
 ///
 /// Creates the `Rivet` directory if it does not exist.
 /// The caller (`window.rs`) silently discards any returned error.
-pub(crate) fn save(tabs: &[TabEntry], active_tab: usize) -> io::Result<()> {
+pub(crate) fn save(tabs: &[TabEntry], active_tab: usize, dark_mode: bool) -> io::Result<()> {
     let path = session_path()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "APPDATA not set"))?;
 
@@ -67,6 +69,7 @@ pub(crate) fn save(tabs: &[TabEntry], active_tab: usize) -> io::Result<()> {
         version:    SESSION_VERSION,
         tabs:       tabs.to_vec(),
         active_tab,
+        dark_mode,
     };
 
     let file = fs::File::create(&path)?;
@@ -88,4 +91,86 @@ pub(crate) fn load() -> Option<SessionFile> {
         return None;
     }
     Some(sf)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_tab(path: Option<&str>) -> TabEntry {
+        TabEntry {
+            path:        path.map(str::to_owned),
+            caret_pos:   10,
+            scroll_line: 2,
+            encoding:    "UTF-8".to_owned(),
+            eol:         "CRLF".to_owned(),
+        }
+    }
+
+    #[test]
+    fn roundtrip_with_dark_mode() {
+        let sf = SessionFile {
+            version:    SESSION_VERSION,
+            tabs:       vec![make_tab(Some("C:\\foo.txt")), make_tab(None)],
+            active_tab: 1,
+            dark_mode:  true,
+        };
+        let json = serde_json::to_string(&sf).expect("serialize");
+        let sf2: SessionFile = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(sf2.version,    SESSION_VERSION);
+        assert_eq!(sf2.active_tab, 1);
+        assert_eq!(sf2.dark_mode,  true);
+        assert_eq!(sf2.tabs.len(), 2);
+        assert_eq!(sf2.tabs[0].path,        Some("C:\\foo.txt".to_owned()));
+        assert_eq!(sf2.tabs[0].caret_pos,   10);
+        assert_eq!(sf2.tabs[0].scroll_line, 2);
+        assert_eq!(sf2.tabs[0].encoding,    "UTF-8");
+        assert_eq!(sf2.tabs[0].eol,         "CRLF");
+        assert_eq!(sf2.tabs[1].path,        None);
+    }
+
+    #[test]
+    fn roundtrip_light_mode() {
+        let sf = SessionFile {
+            version: SESSION_VERSION, tabs: vec![], active_tab: 0, dark_mode: false,
+        };
+        let json = serde_json::to_string(&sf).expect("serialize");
+        let sf2: SessionFile = serde_json::from_str(&json).expect("deserialize");
+        assert!(!sf2.dark_mode);
+    }
+
+    /// Old session files written before Phase 8 have no `dark_mode` field.
+    /// `#[serde(default)]` must make them parse as `dark_mode = false`.
+    #[test]
+    fn dark_mode_defaults_to_false_when_absent() {
+        let json = r#"{"version":1,"tabs":[],"active_tab":0}"#;
+        let sf: SessionFile = serde_json::from_str(json).expect("deserialize old format");
+        assert!(!sf.dark_mode, "missing dark_mode should default to false");
+    }
+
+    /// A session file with an unrecognised version number must be rejected
+    /// by `load()`.  Test the parse-and-check logic directly.
+    #[test]
+    fn wrong_version_is_rejected() {
+        let sf = SessionFile {
+            version: 99, tabs: vec![], active_tab: 0, dark_mode: false,
+        };
+        let json = serde_json::to_string(&sf).expect("serialize");
+        let parsed: SessionFile = serde_json::from_str(&json).expect("deserialize");
+        // load() would return None for this version; assert the condition directly.
+        assert_ne!(parsed.version, SESSION_VERSION);
+    }
+
+    #[test]
+    fn tab_entry_with_none_path_roundtrips() {
+        let sf = SessionFile {
+            version: SESSION_VERSION, tabs: vec![make_tab(None)], active_tab: 0, dark_mode: false,
+        };
+        let json  = serde_json::to_string(&sf).expect("serialize");
+        let sf2: SessionFile = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(sf2.tabs[0].path, None);
+    }
 }

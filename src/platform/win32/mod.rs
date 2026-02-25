@@ -16,4 +16,4 @@
 pub mod dialogs; // Phase 3: common open/save/find dialogs
 pub mod window; // Phase 2: main window, WndProc, message loop
 
-// pub mod dpi;      // Phase 8: per-monitor DPI v2 helpers
+pub(crate) mod dpi;   // Phase 8: per-monitor DPI v2 helpers

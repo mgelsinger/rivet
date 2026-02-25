@@ -8,6 +8,7 @@
 //   • WM_DESTROY → drop WindowState (SciDll::drop calls FreeLibrary).
 //   • WM_COMMAND → File > New/Open/Save/Save As/Exit, Help > About.
 //   • WM_NOTIFY  → Scintilla notifications + TCN_SELCHANGE (tab switch).
+//   • WM_TIMER   → periodic 30-second session checkpoint.
 //   • Expose a safe error-dialog helper for main().
 //
 // State threading: a `Box<WindowState>` is stored in GWLP_USERDATA.
@@ -37,9 +38,10 @@ use windows::{
                 IDI_APPLICATION, IDNO, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO,
                 MB_YESNOCANCEL, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
                 MF_UNCHECKED, MSG, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, WINDOW_EX_STYLE,
+                KillTimer, SetTimer,
                 WINDOW_STYLE, WNDCLASS_STYLES, WNDCLASSEXW, WM_CLOSE, WM_COMMAND, WM_CREATE,
-                WM_DESTROY, WM_INITDIALOG, WM_NOTIFY, WM_SIZE, WS_CHILD, WS_CLIPSIBLINGS,
-                WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                WM_DESTROY, WM_INITDIALOG, WM_NOTIFY, WM_SIZE, WM_TIMER,
+                WS_CHILD, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
     },
@@ -87,6 +89,7 @@ const IDM_FORMAT_EOL_LF:   usize = 3001;
 const IDM_FORMAT_EOL_CR:   usize = 3002;
 
 const IDM_VIEW_WORD_WRAP:  usize = 4000;
+const IDM_VIEW_DARK_MODE:  usize = 4001;
 
 const IDM_SEARCH_FIND:      usize = 5000;
 const IDM_SEARCH_REPLACE:   usize = 5001;
@@ -95,6 +98,13 @@ const IDM_SEARCH_FIND_PREV: usize = 5003;
 const IDM_SEARCH_GOTO_LINE: usize = 5004;
 
 const IDM_HELP_ABOUT: usize = 9001;
+
+// ── Auto-save timer ───────────────────────────────────────────────────────────
+
+/// `nIDEvent` passed to `SetTimer` for the periodic session checkpoint.
+const AUTOSAVE_TIMER_ID: usize = 1;
+/// Auto-save interval in milliseconds (30 seconds).
+const AUTOSAVE_INTERVAL_MS: u32 = 30_000;
 
 // ── FindReplace dialog flags (from commdlg.h) ─────────────────────────────────
 
@@ -121,9 +131,14 @@ static FIND_MSG_ID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
 /// Win32 window class for the common-controls tab control.
 const TAB_CLASS: PCWSTR = w!("SysTabControl32");
 
-/// Fixed height of the tab strip in device pixels.
-/// Phase 8 will measure this dynamically for DPI awareness.
-const TAB_BAR_HEIGHT: i32 = 25;
+/// Baseline height of the tab strip at 96 DPI; scaled by actual DPI at runtime.
+const TAB_BAR_BASE_H: i32 = 25;
+
+/// `WM_DPICHANGED` — sent when the window moves to a monitor with a different DPI.
+const WM_DPICHANGED: u32 = 0x02E0;
+
+/// `DWMWA_USE_IMMERSIVE_DARK_MODE` attribute ID for `DwmSetWindowAttribute`.
+const DWMWA_DARK_MODE: i32 = 20;
 
 // Tab-control messages (from commctrl.h; windows crate 0.58 doesn't export them).
 const TCM_FIRST: u32 = 0x1300;
@@ -170,10 +185,12 @@ const SB_SETTEXT: u32 = 0x0401;
 /// A right-edge of -1 means "extend to the end of the bar".
 const SB_SETPARTS: u32 = 0x0404;
 
-/// Width of the encoding part (e.g. "UTF-16 LE"), device pixels.
-const SB_PART_ENCODING_W: i32 = 120;
-/// Width of the EOL part (e.g. "CRLF"), device pixels.
-const SB_PART_EOL_W: i32 = 60;
+/// Width of the encoding part at 96 DPI baseline (e.g. "UTF-16 LE").
+const SB_PART_ENCODING_W_BASE: i32 = 120;
+/// Width of the EOL part at 96 DPI baseline (e.g. "CRLF").
+const SB_PART_EOL_W_BASE: i32 = 60;
+/// Width of the language part at 96 DPI baseline (e.g. "JavaScript").
+const SB_PART_LANG_W_BASE: i32 = 130;
 
 // ── Per-window state ──────────────────────────────────────────────────────────
 
@@ -198,6 +215,12 @@ struct WindowState {
     hwnd_tab: HWND,
     /// The Win32 `msctls_statusbar32` status bar child window.
     hwnd_status: HWND,
+    // ── Phase 8: DPI + dark mode ───────────────────────────────────────────────
+    /// Current display DPI; initialised to 96, updated in `post_create_init`
+    /// and `WM_DPICHANGED`.
+    dpi: u32,
+    /// Whether dark mode is currently active; persisted in `session.json`.
+    dark_mode: bool,
     // ── Phase 6: Find / Replace state ─────────────────────────────────────────
     /// Heap-stable UTF-16 buffer for the Find text (pointed to by `findreplace`).
     find_buf: Box<[u16; 512]>,
@@ -220,6 +243,9 @@ struct WindowState {
 pub(crate) fn run() -> Result<()> {
     #[cfg(debug_assertions)]
     let t0 = std::time::Instant::now();
+
+    // Per-Monitor v2 DPI awareness — must be set before any window is created.
+    crate::platform::win32::dpi::init();
 
     // SAFETY: GetModuleHandleW(None) always succeeds — it returns the exe's
     // own module handle and never fails in a normally-loaded process.
@@ -320,6 +346,12 @@ fn register_class(hinstance: HINSTANCE) -> Result<()> {
 }
 
 fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
+    // Scale the initial window size to the primary monitor's DPI so the window
+    // appears at a consistent logical size on high-DPI displays.
+    let sys_dpi = crate::platform::win32::dpi::get_system_dpi();
+    let init_w   = crate::platform::win32::dpi::scale(DEFAULT_WIDTH,  sys_dpi);
+    let init_h   = crate::platform::win32::dpi::scale(DEFAULT_HEIGHT, sys_dpi);
+
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -327,7 +359,7 @@ fn create_window(hinstance: HINSTANCE) -> Result<HWND> {
             APP_TITLE,
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT, CW_USEDEFAULT,
-            DEFAULT_WIDTH, DEFAULT_HEIGHT,
+            init_w, init_h,
             HWND::default(),
             HMENU::default(),
             hinstance,
@@ -400,9 +432,14 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
 
     let app = App::new();
 
-    // Split the status bar: encoding | EOL | caret position.
-    let parts: [i32; 3] = [SB_PART_ENCODING_W, SB_PART_ENCODING_W + SB_PART_EOL_W, -1];
-    // SAFETY: hwnd_status is valid; parts is a non-null i32 array.
+    // Split the status bar at 96 DPI baseline; `post_create_init` rescales if needed.
+    let parts: [i32; 4] = [
+        SB_PART_ENCODING_W_BASE,
+        SB_PART_ENCODING_W_BASE + SB_PART_EOL_W_BASE,
+        SB_PART_ENCODING_W_BASE + SB_PART_EOL_W_BASE + SB_PART_LANG_W_BASE,
+        -1, // language: extends to fill remaining width
+    ];
+    // SAFETY: hwnd_status is valid; parts is a non-null i32 array of right-edge pixels.
     unsafe {
         let _ = SendMessageW(
             hwnd_status,
@@ -437,6 +474,8 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
 
     let state = WindowState {
         app, sci_views, sci_dll, hwnd_tab, hwnd_status,
+        dpi: crate::platform::win32::dpi::BASE_DPI,
+        dark_mode: false,
         find_buf, replace_buf, findreplace,
         hwnd_find_dlg: HWND::default(),
     };
@@ -451,18 +490,20 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
 /// Resize the tab bar, Scintilla view, and status bar to fill the client area.
 ///
 /// Layout zones (top to bottom):
-///   1. Tab strip  — `TAB_BAR_HEIGHT` px at top
+///   1. Tab strip  — `TAB_BAR_BASE_H` px at 96 DPI, scaled at runtime
 ///   2. Scintilla  — fills remaining space
 ///   3. Status bar — self-measures at bottom
 ///
 /// # Safety
 /// `state` must point to a live `WindowState` whose child HWNDs are valid.
 unsafe fn layout_children(state: &WindowState, client_width: i32, client_height: i32) {
-    // Zone 1: tab strip — full width, fixed height.
+    let tab_h = crate::platform::win32::dpi::scale(TAB_BAR_BASE_H, state.dpi);
+
+    // Zone 1: tab strip — full width, DPI-scaled height.
     let _ = SetWindowPos(
         state.hwnd_tab,
         HWND::default(),
-        0, 0, client_width, TAB_BAR_HEIGHT,
+        0, 0, client_width, tab_h,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
 
@@ -473,8 +514,8 @@ unsafe fn layout_children(state: &WindowState, client_width: i32, client_height:
     let status_h = sr.bottom;
 
     // Zone 2: Scintilla — fills the space between zones 1 and 3.
-    let sci_y = TAB_BAR_HEIGHT;
-    let sci_h = (client_height - TAB_BAR_HEIGHT - status_h).max(0);
+    let sci_y = tab_h;
+    let sci_h = (client_height - tab_h - status_h).max(0);
     let _ = SetWindowPos(
         state.sci_views[state.app.active_idx].hwnd(),
         HWND::default(),
@@ -620,6 +661,10 @@ fn build_menu() -> Result<HMENU> {
         let view = CreateMenu().map_err(RivetError::from)?;
         AppendMenuW(view, MF_STRING, IDM_VIEW_WORD_WRAP, w!("Word &Wrap"))
             .map_err(RivetError::from)?;
+        AppendMenuW(view, MF_SEPARATOR, 0, PCWSTR::null())
+            .map_err(RivetError::from)?;
+        AppendMenuW(view, MF_STRING, IDM_VIEW_DARK_MODE, w!("&Dark Mode"))
+            .map_err(RivetError::from)?;
 
         // ── Help ──────────────────────────────────────────────────────────────
         let help = CreateMenu().map_err(RivetError::from)?;
@@ -729,6 +774,7 @@ unsafe extern "system" fn wnd_proc(
                 Ok(state) => {
                     let ptr = Box::into_raw(Box::new(state));
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
+                    post_create_init(hwnd, &mut *ptr);
                     LRESULT(0)
                 }
                 Err(e) => {
@@ -779,6 +825,9 @@ unsafe extern "system" fn wnd_proc(
             // Drop order: app → sci_views → sci_dll (FreeLibrary) → hwnd_*.
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             if !ptr.is_null() {
+                // Stop the auto-save timer before freeing state.
+                // SAFETY: hwnd is valid; timer ID matches the one set in post_create_init.
+                let _ = KillTimer(hwnd, AUTOSAVE_TIMER_ID);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 drop(Box::from_raw(ptr));
             }
@@ -890,6 +939,12 @@ unsafe extern "system" fn wnd_proc(
                     LRESULT(0)
                 }
 
+                // ── View — Dark Mode ──────────────────────────────────────────
+                IDM_VIEW_DARK_MODE => {
+                    if !ptr.is_null() { handle_dark_mode_toggle(hwnd, &mut *ptr); }
+                    LRESULT(0)
+                }
+
                 // ── Search commands ───────────────────────────────────────────
                 IDM_SEARCH_FIND => {
                     if !ptr.is_null() { handle_find_open(hwnd, &mut *ptr); }
@@ -993,6 +1048,37 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
 
+        // ── Periodic session checkpoint ───────────────────────────────────────
+        WM_TIMER => {
+            if wparam.0 == AUTOSAVE_TIMER_ID {
+                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowState;
+                if !ptr.is_null() {
+                    save_session(&*ptr);
+                }
+            }
+            LRESULT(0)
+        }
+
+        // ── DPI change ────────────────────────────────────────────────────────
+        WM_DPICHANGED => {
+            let new_dpi = (wparam.0 & 0xFFFF) as u32;
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
+            if !ptr.is_null() {
+                let state = &mut *ptr;
+                state.dpi = new_dpi;
+                // Windows provides the optimal new window bounds in LPARAM.
+                // SAFETY: Windows guarantees LPARAM is a valid *const RECT for WM_DPICHANGED.
+                let r = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    hwnd, HWND::default(),
+                    r.left, r.top, r.right - r.left, r.bottom - r.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+                update_statusbar_parts(state);
+            }
+            LRESULT(0)
+        }
+
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
@@ -1083,6 +1169,7 @@ unsafe fn load_file_into_active_tab(
         (doc.large_file, doc.eol)
     };
     state.sci_views[idx].set_large_file_mode(large_file);
+    apply_highlighting(&state.sci_views[idx], state.app.active_doc(), state.dark_mode);
     state.sci_views[idx].set_eol_mode(eol);
     state.sci_views[idx].set_word_wrap(false); // always off on open; user toggles explicitly
     state.sci_views[idx].set_text(&utf8);
@@ -1124,6 +1211,7 @@ unsafe fn open_file_in_new_tab(
         (doc.large_file, doc.eol)
     };
     state.sci_views[new_idx].set_large_file_mode(large_file);
+    apply_highlighting(&state.sci_views[new_idx], state.app.active_doc(), state.dark_mode);
     state.sci_views[new_idx].set_eol_mode(eol);
     state.sci_views[new_idx].set_word_wrap(false); // always off on open; user toggles explicitly
     state.sci_views[new_idx].set_text(&utf8);
@@ -1157,6 +1245,9 @@ unsafe fn open_untitled_tab(hwnd: HWND, state: &mut WindowState) {
 
     tab_insert(state.hwnd_tab, new_idx, "Untitled");
     let _ = SendMessageW(state.hwnd_tab, TCM_SETCURSEL, WPARAM(new_idx), LPARAM(0));
+
+    // Apply Consolas font + current palette so all tabs are visually consistent.
+    apply_highlighting(&state.sci_views[new_idx], state.app.active_doc(), state.dark_mode);
 
     state.sci_views[new_idx].show(true);
 
@@ -1220,6 +1311,8 @@ unsafe fn handle_file_save(hwnd: HWND, state: &mut WindowState, force_dialog: bo
             state.sci_views[idx].set_save_point();
             sync_tab_label(state, idx);
             update_window_title(hwnd, &state.app);
+            // Refresh language in status bar (extension may have changed via Save As).
+            update_status_bar(state);
         }
         Err(e) => show_error_dialog(&format!("Could not save file:\n{e}")),
     }
@@ -1271,6 +1364,91 @@ unsafe fn update_wrap_checkmark(hwnd: HWND, wrap: bool) {
     // SAFETY: menu is the main window's menu bar (valid while the window exists).
     // CheckMenuItem with MF_BYCOMMAND searches all submenus.
     let _ = CheckMenuItem(menu, IDM_VIEW_WORD_WRAP as u32, flag);
+}
+
+// ── DPI + status bar helpers ─────────────────────────────────────────────────
+
+/// Initialise DPI tracking and apply initial highlighting to the first tab.
+///
+/// Called from WM_CREATE after the `WindowState` is stored in GWLP_USERDATA.
+///
+/// # Safety
+/// `hwnd` must be the valid main-window handle; `state` must be live.
+unsafe fn post_create_init(hwnd: HWND, state: &mut WindowState) {
+    state.dpi = crate::platform::win32::dpi::get_for_window(hwnd);
+    if state.dpi != crate::platform::win32::dpi::BASE_DPI {
+        update_statusbar_parts(state);
+    }
+    // Apply Consolas font + initial palette to the first untitled tab.
+    apply_highlighting(&state.sci_views[0], state.app.active_doc(), state.dark_mode);
+    // Start the periodic session checkpoint timer.
+    // SAFETY: hwnd is valid; no callback (None) — the timer fires as WM_TIMER.
+    let _ = SetTimer(hwnd, AUTOSAVE_TIMER_ID, AUTOSAVE_INTERVAL_MS, None);
+}
+
+/// Recompute and apply DPI-scaled status-bar part widths.
+fn update_statusbar_parts(state: &WindowState) {
+    use crate::platform::win32::dpi;
+    let enc  = dpi::scale(SB_PART_ENCODING_W_BASE, state.dpi);
+    let eol  = dpi::scale(SB_PART_EOL_W_BASE,      state.dpi);
+    let lang = dpi::scale(SB_PART_LANG_W_BASE,      state.dpi);
+    let parts: [i32; 4] = [enc, enc + eol, enc + eol + lang, -1];
+    // SAFETY: hwnd_status is a valid status-bar HWND for the lifetime of WindowState.
+    unsafe {
+        let _ = SendMessageW(
+            state.hwnd_status,
+            SB_SETPARTS,
+            WPARAM(parts.len()),
+            LPARAM(parts.as_ptr() as isize),
+        );
+    }
+}
+
+// ── Dark mode helpers ─────────────────────────────────────────────────────────
+
+/// Toggle dark mode: flip flag, update chrome + checkmark, re-theme all views.
+///
+/// # Safety
+/// `hwnd` must be the valid main-window handle; `state` must be live.
+unsafe fn handle_dark_mode_toggle(hwnd: HWND, state: &mut WindowState) {
+    state.dark_mode = !state.dark_mode;
+    apply_title_bar_dark(hwnd, state.dark_mode);
+    update_dark_mode_checkmark(hwnd, state.dark_mode);
+    reapply_all_themes(state);
+}
+
+/// Set or clear the View > Dark Mode checkmark.
+///
+/// # Safety
+/// `hwnd` must be the valid main-window handle.
+unsafe fn update_dark_mode_checkmark(hwnd: HWND, dark: bool) {
+    let flag = (MF_BYCOMMAND | if dark { MF_CHECKED } else { MF_UNCHECKED }).0;
+    let _ = CheckMenuItem(GetMenu(hwnd), IDM_VIEW_DARK_MODE as u32, flag);
+}
+
+/// Apply or remove dark DWM window chrome (title bar).
+///
+/// Silently ignored on unsupported Windows versions.
+fn apply_title_bar_dark(hwnd: HWND, dark: bool) {
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+    let value: u32 = dark as u32;
+    // SAFETY: hwnd is a valid window handle; pvAttribute points to a u32 whose
+    // size matches cbAttribute.
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE(DWMWA_DARK_MODE),
+            &value as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+}
+
+/// Re-apply highlighting (with the current `dark_mode` flag) to every open tab.
+fn reapply_all_themes(state: &mut WindowState) {
+    for i in 0..state.app.tabs.len() {
+        apply_highlighting(&state.sci_views[i], &state.app.tabs[i], state.dark_mode);
+    }
 }
 
 // ── Find / Replace helpers ────────────────────────────────────────────────────
@@ -1676,14 +1854,50 @@ unsafe fn pwstr_to_utf8(pwstr: PWSTR) -> Vec<u8> {
 ///
 /// # Safety
 /// `state.hwnd_status` and the active sci_view must be valid.
+// ── Syntax highlighting ────────────────────────────────────────────────────────
+
+/// Apply the language lexer and colour theme to `sci` based on `doc`.
+///
+/// Skipped for large files (`doc.large_file == true`) — they stay with
+/// `SCLEX_NULL` (plain text) which is already set by `set_large_file_mode`.
+fn apply_highlighting(sci: &ScintillaView, doc: &crate::app::DocumentState, dark: bool) {
+    if doc.large_file {
+        return;
+    }
+    let lang = match &doc.path {
+        Some(p) => crate::languages::language_from_path(p),
+        None    => crate::languages::Language::PlainText,
+    };
+    sci.set_lexer(lang.lexer_id());
+    for (set_idx, words) in crate::languages::keywords(lang) {
+        sci.set_keywords(*set_idx, words);
+    }
+    crate::theme::apply_theme(sci, lang, dark);
+}
+
 unsafe fn update_status_bar(state: &WindowState) {
     let idx = state.app.active_idx;
     let (line, col) = state.sci_views[idx].caret_line_col();
-    let (enc, eol) = {
+    let (enc, eol, large_file, path) = {
         let doc = state.app.active_doc();
-        (doc.encoding.as_str().to_owned(), doc.eol.as_str().to_owned())
+        (
+            doc.encoding.as_str().to_owned(),
+            doc.eol.as_str().to_owned(),
+            doc.large_file,
+            doc.path.clone(),
+        )
     };
-    let texts: [String; 3] = [enc, eol, format!("Ln {line}, Col {col}")];
+    let lang = match &path {
+        Some(p) => crate::languages::language_from_path(p),
+        None    => crate::languages::Language::PlainText,
+    };
+    let lang_text = if large_file {
+        format!("{} [Large]", lang.display_name())
+    } else {
+        lang.display_name().to_owned()
+    };
+    // Parts: 0=encoding, 1=EOL, 2=Ln/Col, 3=language
+    let texts: [String; 4] = [enc, eol, format!("Ln {line}, Col {col}"), lang_text];
     for (i, text) in texts.iter().enumerate() {
         let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         let _ = SendMessageW(
@@ -1890,7 +2104,7 @@ fn save_session(state: &WindowState) {
         })
         .collect();
 
-    let _ = crate::session::save(&entries, state.app.active_idx);
+    let _ = crate::session::save(&entries, state.app.active_idx, state.dark_mode);
 }
 
 /// Re-open the tabs recorded in the session file.
@@ -1905,6 +2119,14 @@ fn save_session(state: &WindowState) {
 /// `WindowState`.
 unsafe fn restore_session(hwnd: HWND, state: &mut WindowState) {
     let Some(sf) = crate::session::load() else { return; };
+
+    // Restore dark mode BEFORE loading files so each apply_highlighting call
+    // uses the correct palette.
+    if sf.dark_mode {
+        state.dark_mode = true;
+        apply_title_bar_dark(hwnd, true);
+        update_dark_mode_checkmark(hwnd, true);
+    }
 
     let mut opened_any = false;
 

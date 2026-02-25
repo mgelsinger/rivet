@@ -17,6 +17,9 @@ pub(crate) struct SessionFile {
     pub(crate) active_tab: usize,
     #[serde(default)] // backward-compat: old files without this field parse as false
     pub(crate) dark_mode: bool,
+    /// 0 = Top, 1 = Left, 2 = Right.
+    #[serde(default)]
+    pub(crate) tab_position: u8,
 }
 
 /// One entry per open tab.
@@ -57,7 +60,12 @@ pub(crate) fn session_path() -> Option<PathBuf> {
 ///
 /// Creates the `Rivet` directory if it does not exist.
 /// The caller (`window.rs`) silently discards any returned error.
-pub(crate) fn save(tabs: &[TabEntry], active_tab: usize, dark_mode: bool) -> io::Result<()> {
+pub(crate) fn save(
+    tabs: &[TabEntry],
+    active_tab: usize,
+    dark_mode: bool,
+    tab_position: u8,
+) -> io::Result<()> {
     let path =
         session_path().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "APPDATA not set"))?;
 
@@ -70,6 +78,7 @@ pub(crate) fn save(tabs: &[TabEntry], active_tab: usize, dark_mode: bool) -> io:
         tabs: tabs.to_vec(),
         active_tab,
         dark_mode,
+        tab_position,
     };
 
     let file = fs::File::create(&path)?;
@@ -115,6 +124,7 @@ mod tests {
             tabs: vec![make_tab(Some("C:\\foo.txt")), make_tab(None)],
             active_tab: 1,
             dark_mode: true,
+            tab_position: 0,
         };
         let json = serde_json::to_string(&sf).expect("serialize");
         let sf2: SessionFile = serde_json::from_str(&json).expect("deserialize");
@@ -138,6 +148,7 @@ mod tests {
             tabs: vec![],
             active_tab: 0,
             dark_mode: false,
+            tab_position: 0,
         };
         let json = serde_json::to_string(&sf).expect("serialize");
         let sf2: SessionFile = serde_json::from_str(&json).expect("deserialize");
@@ -162,6 +173,7 @@ mod tests {
             tabs: vec![],
             active_tab: 0,
             dark_mode: false,
+            tab_position: 0,
         };
         let json = serde_json::to_string(&sf).expect("serialize");
         let parsed: SessionFile = serde_json::from_str(&json).expect("deserialize");
@@ -176,6 +188,7 @@ mod tests {
             tabs: vec![make_tab(None)],
             active_tab: 0,
             dark_mode: false,
+            tab_position: 0,
         };
         let json = serde_json::to_string(&sf).expect("serialize");
         let sf2: SessionFile = serde_json::from_str(&json).expect("deserialize");

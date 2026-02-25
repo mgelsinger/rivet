@@ -35,13 +35,14 @@ use windows::{
                 SendMessageW, SetDlgItemTextW, SetForegroundWindow, SetMenu, SetTimer,
                 SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
                 TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, CW_USEDEFAULT, DLGTEMPLATE, FCONTROL,
-                FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDC_ARROW, IDI_APPLICATION, IDNO,
-                IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MB_YESNOCANCEL,
-                MESSAGEBOX_STYLE, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-                MF_UNCHECKED, MSG, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOW, WINDOW_EX_STYLE,
-                WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_INITDIALOG,
-                WM_NOTIFY, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD,
-                WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                FSHIFT, FVIRTKEY, GWL_STYLE, GWLP_USERDATA, HACCEL, HMENU, IDC_ARROW,
+                IDI_APPLICATION, IDNO, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO,
+                MB_YESNOCANCEL, MESSAGEBOX_STYLE, MF_BYCOMMAND, MF_CHECKED, MF_POPUP,
+                MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+                SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_INITDIALOG, WM_NOTIFY, WM_SIZE,
+                WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD, WS_CLIPSIBLINGS,
+                WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
     },
@@ -93,6 +94,9 @@ const IDM_FORMAT_EOL_CR: usize = 3002;
 
 const IDM_VIEW_WORD_WRAP: usize = 4000;
 const IDM_VIEW_DARK_MODE: usize = 4001;
+const IDM_VIEW_TAB_TOP: usize = 4002;
+const IDM_VIEW_TAB_LEFT: usize = 4003;
+const IDM_VIEW_TAB_RIGHT: usize = 4004;
 
 const IDM_SEARCH_FIND: usize = 5000;
 const IDM_SEARCH_REPLACE: usize = 5001;
@@ -145,7 +149,7 @@ const DWMWA_DARK_MODE: i32 = 20;
 
 // Tab-control messages (from commctrl.h; windows crate 0.58 doesn't export them).
 const TCM_FIRST: u32 = 0x1300;
-const TCM_INSERTITEMW: u32 = TCM_FIRST + 7; // 0x1307
+const TCM_INSERTITEMW: u32 = TCM_FIRST + 62; // 0x133E — Unicode version (TCM_FIRST+7 is ANSI)
 const TCM_DELETEITEM: u32 = TCM_FIRST + 8; // 0x1308  (used in Phase 4d)
 const TCM_GETCURSEL: u32 = TCM_FIRST + 11; // 0x130B
 const TCM_SETCURSEL: u32 = TCM_FIRST + 12; // 0x130C
@@ -153,6 +157,15 @@ const TCM_SETITEMW: u32 = TCM_FIRST + 61; // 0x133D
 
 // Tab-control notifications.
 const TCN_SELCHANGE: u32 = 0xFFFF_FDD9; // (-551i32 as u32)
+
+// Tab-control styles for side-positioned tab bars.
+/// Draws tabs vertically along the left edge of the tab control.
+const TCS_VERTICAL: u32 = 0x0080;
+/// When combined with `TCS_VERTICAL`, draws tabs along the right edge instead.
+const TCS_RIGHT: u32 = 0x0002;
+
+/// Width of the side tab bar at 96 DPI baseline.
+const TAB_BAR_SIDE_W_BASE: i32 = 160;
 
 // Tab-control item flags / styles.
 const TCIF_TEXT: u32 = 0x0001;
@@ -181,8 +194,9 @@ const STATUS_CLASS: PCWSTR = w!("msctls_statusbar32");
 /// `SBARS_SIZEGRIP` — adds a resize grip at the bottom-right corner.
 const SBARS_SIZEGRIP: u32 = 0x0100;
 
-/// `SB_SETTEXT` message — sets the text of a status-bar part.
-const SB_SETTEXT: u32 = 0x0401;
+/// `SB_SETTEXTW` message — sets the text of a status-bar part (Unicode).
+/// 0x0401 is the ANSI version; 0x040B is the Unicode version (WM_USER+11).
+const SB_SETTEXT: u32 = 0x040B;
 
 /// `SB_SETPARTS` message — sets the number of parts and their right-edge pixel
 /// positions.  WPARAM = part count; LPARAM = pointer to i32 array of edges.
@@ -195,6 +209,37 @@ const SB_PART_ENCODING_W_BASE: i32 = 120;
 const SB_PART_EOL_W_BASE: i32 = 60;
 /// Width of the language part at 96 DPI baseline (e.g. "JavaScript").
 const SB_PART_LANG_W_BASE: i32 = 130;
+
+// ── Tab position ──────────────────────────────────────────────────────────────
+
+/// Where the tab bar is rendered relative to the editor area.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabPosition {
+    /// Tab strip runs horizontally across the top (default).
+    Top,
+    /// Tab strip runs vertically along the left edge.
+    Left,
+    /// Tab strip runs vertically along the right edge.
+    Right,
+}
+
+impl TabPosition {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => TabPosition::Left,
+            2 => TabPosition::Right,
+            _ => TabPosition::Top,
+        }
+    }
+
+    fn as_u8(self) -> u8 {
+        match self {
+            TabPosition::Top => 0,
+            TabPosition::Left => 1,
+            TabPosition::Right => 2,
+        }
+    }
+}
 
 // ── Per-window state ──────────────────────────────────────────────────────────
 
@@ -225,6 +270,8 @@ struct WindowState {
     dpi: u32,
     /// Whether dark mode is currently active; persisted in `session.json`.
     dark_mode: bool,
+    /// Where the tab bar is rendered; persisted in `session.json`.
+    tab_position: TabPosition,
     // ── Phase 6: Find / Replace state ─────────────────────────────────────────
     /// Heap-stable UTF-16 buffer for the Find text (pointed to by `findreplace`).
     find_buf: Box<[u16; 512]>,
@@ -490,6 +537,7 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
         hwnd_status,
         dpi: crate::platform::win32::dpi::BASE_DPI,
         dark_mode: true,
+        tab_position: TabPosition::Top,
         find_buf,
         replace_buf,
         findreplace,
@@ -505,47 +553,103 @@ fn create_child_controls(hwnd_parent: HWND, hinstance: HINSTANCE) -> Result<Wind
 
 /// Resize the tab bar, Scintilla view, and status bar to fill the client area.
 ///
-/// Layout zones (top to bottom):
-///   1. Tab strip  — `TAB_BAR_BASE_H` px at 96 DPI, scaled at runtime
-///   2. Scintilla  — fills remaining space
-///   3. Status bar — self-measures at bottom
+/// The status bar always self-measures at the bottom.  The tab strip and editor
+/// area are laid out in one of three configurations:
+///
+/// - **Top** (default): tab strip across the top, editor fills the rest.
+/// - **Left**: tab strip as a vertical strip on the left, editor to its right.
+/// - **Right**: tab strip as a vertical strip on the right, editor to its left.
 ///
 /// # Safety
 /// `state` must point to a live `WindowState` whose child HWNDs are valid.
 unsafe fn layout_children(state: &WindowState, client_width: i32, client_height: i32) {
-    let tab_h = crate::platform::win32::dpi::scale(TAB_BAR_BASE_H, state.dpi);
+    use crate::platform::win32::dpi;
 
-    // Zone 1: tab strip — full width, DPI-scaled height.
-    let _ = SetWindowPos(
-        state.hwnd_tab,
-        HWND::default(),
-        0,
-        0,
-        client_width,
-        tab_h,
-        SWP_NOZORDER | SWP_NOACTIVATE,
-    );
-
-    // Zone 3: status bar — self-repositions when it receives WM_SIZE.
+    // Status bar always occupies the bottom; it self-positions from WM_SIZE.
     let _ = SendMessageW(state.hwnd_status, WM_SIZE, WPARAM(0), LPARAM(0));
-    // Re-anchor the right-side panels now that the status bar has its new width.
     update_statusbar_parts(state);
     let mut sr = RECT::default();
     let _ = GetClientRect(state.hwnd_status, &mut sr);
     let status_h = sr.bottom;
 
-    // Zone 2: Scintilla — fills the space between zones 1 and 3.
-    let sci_y = tab_h;
-    let sci_h = (client_height - tab_h - status_h).max(0);
-    let _ = SetWindowPos(
-        state.sci_views[state.app.active_idx].hwnd(),
-        HWND::default(),
-        0,
-        sci_y,
-        client_width,
-        sci_h,
-        SWP_NOZORDER | SWP_NOACTIVATE,
-    );
+    let sci_hwnd = state.sci_views[state.app.active_idx].hwnd();
+
+    match state.tab_position {
+        TabPosition::Top => {
+            let tab_h = dpi::scale(TAB_BAR_BASE_H, state.dpi);
+            // Tab strip: full width across the top.
+            let _ = SetWindowPos(
+                state.hwnd_tab,
+                HWND::default(),
+                0,
+                0,
+                client_width,
+                tab_h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            // Editor: below tab strip, above status bar.
+            let sci_h = (client_height - tab_h - status_h).max(0);
+            let _ = SetWindowPos(
+                sci_hwnd,
+                HWND::default(),
+                0,
+                tab_h,
+                client_width,
+                sci_h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        TabPosition::Left => {
+            let tab_w = dpi::scale(TAB_BAR_SIDE_W_BASE, state.dpi);
+            let content_h = (client_height - status_h).max(0);
+            // Tab strip: vertical strip on the left.
+            let _ = SetWindowPos(
+                state.hwnd_tab,
+                HWND::default(),
+                0,
+                0,
+                tab_w,
+                content_h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            // Editor: to the right of the tab strip.
+            let sci_w = (client_width - tab_w).max(0);
+            let _ = SetWindowPos(
+                sci_hwnd,
+                HWND::default(),
+                tab_w,
+                0,
+                sci_w,
+                content_h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        TabPosition::Right => {
+            let tab_w = dpi::scale(TAB_BAR_SIDE_W_BASE, state.dpi);
+            let content_h = (client_height - status_h).max(0);
+            let tab_x = (client_width - tab_w).max(0);
+            // Tab strip: vertical strip on the right.
+            let _ = SetWindowPos(
+                state.hwnd_tab,
+                HWND::default(),
+                tab_x,
+                0,
+                tab_w,
+                content_h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            // Editor: to the left of the tab strip.
+            let _ = SetWindowPos(
+                sci_hwnd,
+                HWND::default(),
+                0,
+                0,
+                tab_x,
+                content_h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
 }
 
 // ── Tab helpers ───────────────────────────────────────────────────────────────
@@ -723,6 +827,13 @@ fn build_menu() -> Result<HMENU> {
             .map_err(RivetError::from)?;
         AppendMenuW(view, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
         AppendMenuW(view, MF_STRING, IDM_VIEW_DARK_MODE, w!("&Dark Mode"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(view, MF_SEPARATOR, 0, PCWSTR::null()).map_err(RivetError::from)?;
+        AppendMenuW(view, MF_STRING, IDM_VIEW_TAB_TOP, w!("Tabs at &Top"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(view, MF_STRING, IDM_VIEW_TAB_LEFT, w!("Tabs at &Left"))
+            .map_err(RivetError::from)?;
+        AppendMenuW(view, MF_STRING, IDM_VIEW_TAB_RIGHT, w!("Tabs at &Right"))
             .map_err(RivetError::from)?;
 
         // ── Help ──────────────────────────────────────────────────────────────
@@ -1086,6 +1197,26 @@ unsafe extern "system" fn wnd_proc(
                     LRESULT(0)
                 }
 
+                // ── View — Tab position ───────────────────────────────────────
+                IDM_VIEW_TAB_TOP => {
+                    if !ptr.is_null() {
+                        handle_tab_position(hwnd, &mut *ptr, TabPosition::Top);
+                    }
+                    LRESULT(0)
+                }
+                IDM_VIEW_TAB_LEFT => {
+                    if !ptr.is_null() {
+                        handle_tab_position(hwnd, &mut *ptr, TabPosition::Left);
+                    }
+                    LRESULT(0)
+                }
+                IDM_VIEW_TAB_RIGHT => {
+                    if !ptr.is_null() {
+                        handle_tab_position(hwnd, &mut *ptr, TabPosition::Right);
+                    }
+                    LRESULT(0)
+                }
+
                 // ── Search commands ───────────────────────────────────────────
                 IDM_SEARCH_FIND => {
                     if !ptr.is_null() {
@@ -1421,6 +1552,8 @@ unsafe fn open_untitled_tab(hwnd: HWND, state: &mut WindowState) {
         state.dark_mode,
         &state.sci_dll,
     );
+    state.sci_views[new_idx].set_word_wrap(true);
+    state.app.active_doc_mut().word_wrap = true;
 
     state.sci_views[new_idx].show(true);
 
@@ -1550,11 +1683,15 @@ unsafe fn update_wrap_checkmark(hwnd: HWND, wrap: bool) {
 unsafe fn post_create_init(hwnd: HWND, state: &mut WindowState) {
     state.dpi = crate::platform::win32::dpi::get_for_window(hwnd);
     update_statusbar_parts(state);
-    // Apply initial dark mode chrome and menu checkmark.
+    // Apply initial dark mode chrome and menu checkmarks.
     apply_title_bar_dark(hwnd, state.dark_mode);
     update_dark_mode_checkmark(hwnd, state.dark_mode);
+    // Set the initial tab position checkmark (Top by default).
+    update_tab_position_checkmarks(hwnd, state.tab_position);
     // Apply Consolas font + initial palette to the first untitled tab.
     apply_highlighting(&state.sci_views[0], state.app.active_doc(), state.dark_mode, &state.sci_dll);
+    state.sci_views[0].set_word_wrap(true);
+    state.app.active_doc_mut().word_wrap = true;
     // Start the periodic session checkpoint timer.
     // SAFETY: hwnd is valid; no callback (None) — the timer fires as WM_TIMER.
     let _ = SetTimer(hwnd, AUTOSAVE_TIMER_ID, AUTOSAVE_INTERVAL_MS, None);
@@ -1644,6 +1781,63 @@ fn reapply_all_themes(state: &mut WindowState) {
     for i in 0..state.app.tabs.len() {
         apply_highlighting(&state.sci_views[i], &state.app.tabs[i], state.dark_mode, &state.sci_dll);
     }
+}
+
+// ── Tab position helpers ──────────────────────────────────────────────────────
+
+/// Apply the Win32 style bits for `pos` to the tab control and force a repaint.
+///
+/// # Safety
+/// `hwnd_tab` must be a valid `SysTabControl32` HWND.
+unsafe fn set_tab_style(hwnd_tab: HWND, pos: TabPosition) {
+    let cur = GetWindowLongPtrW(hwnd_tab, GWL_STYLE) as u32;
+    let new_style = match pos {
+        TabPosition::Top => cur & !(TCS_VERTICAL | TCS_RIGHT),
+        TabPosition::Left => (cur & !TCS_RIGHT) | TCS_VERTICAL,
+        TabPosition::Right => cur | TCS_VERTICAL | TCS_RIGHT,
+    };
+    SetWindowLongPtrW(hwnd_tab, GWL_STYLE, new_style as isize);
+    // Force the tab control to re-measure and repaint with the new style.
+    let _ = SetWindowPos(
+        hwnd_tab,
+        HWND::default(),
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+    );
+}
+
+/// Change the tab bar position, update the Win32 style, reposition all children.
+///
+/// # Safety
+/// `hwnd` and `state` must be valid.
+unsafe fn handle_tab_position(hwnd: HWND, state: &mut WindowState, pos: TabPosition) {
+    if state.tab_position == pos {
+        return;
+    }
+    state.tab_position = pos;
+    set_tab_style(state.hwnd_tab, pos);
+    update_tab_position_checkmarks(hwnd, pos);
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+    layout_children(state, rc.right, rc.bottom);
+}
+
+/// Sync the View > Tabs at … checkmarks to reflect the current `pos`.
+///
+/// # Safety
+/// `hwnd` must be the valid main-window handle.
+unsafe fn update_tab_position_checkmarks(hwnd: HWND, pos: TabPosition) {
+    let menu = GetMenu(hwnd);
+    let set = |id: usize, checked: bool| {
+        let flag = (MF_BYCOMMAND | if checked { MF_CHECKED } else { MF_UNCHECKED }).0;
+        let _ = CheckMenuItem(menu, id as u32, flag);
+    };
+    set(IDM_VIEW_TAB_TOP, pos == TabPosition::Top);
+    set(IDM_VIEW_TAB_LEFT, pos == TabPosition::Left);
+    set(IDM_VIEW_TAB_RIGHT, pos == TabPosition::Right);
 }
 
 // ── Find / Replace helpers ────────────────────────────────────────────────────
@@ -2360,7 +2554,12 @@ fn save_session(state: &WindowState) {
         })
         .collect();
 
-    let _ = crate::session::save(&entries, state.app.active_idx, state.dark_mode);
+    let _ = crate::session::save(
+        &entries,
+        state.app.active_idx,
+        state.dark_mode,
+        state.tab_position.as_u8(),
+    );
 }
 
 /// Re-open the tabs recorded in the session file.
@@ -2384,6 +2583,14 @@ unsafe fn restore_session(hwnd: HWND, state: &mut WindowState) {
     state.dark_mode = sf.dark_mode;
     apply_title_bar_dark(hwnd, sf.dark_mode);
     update_dark_mode_checkmark(hwnd, sf.dark_mode);
+
+    // Restore tab position.
+    let pos = TabPosition::from_u8(sf.tab_position);
+    if pos != state.tab_position {
+        state.tab_position = pos;
+        set_tab_style(state.hwnd_tab, pos);
+        update_tab_position_checkmarks(hwnd, pos);
+    }
 
     let mut opened_any = false;
 

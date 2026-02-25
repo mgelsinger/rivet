@@ -95,6 +95,59 @@ pub(super) const WM_CLEAR: u32 = 0x0303;
 /// Undo last action (Win32 standard; Scintilla also processes this).
 pub(super) const WM_UNDO:  u32 = 0x0304;
 
+// ── Find / target ─────────────────────────────────────────────────────────────
+
+/// Set the search flags used by `SCI_SEARCHINTARGET`.  WPARAM = flag bitmask.
+pub(super) const SCI_SETSEARCHFLAGS: u32 = 2188;
+/// Set target start position.  WPARAM = byte position.
+pub(super) const SCI_SETTARGETSTART: u32 = 2190;
+/// Get target start position.
+pub(super) const SCI_GETTARGETSTART: u32 = 2191;
+/// Set target end position.  WPARAM = byte position.
+pub(super) const SCI_SETTARGETEND:   u32 = 2192;
+/// Get target end position.
+pub(super) const SCI_GETTARGETEND:   u32 = 2193;
+/// Search for text in the target range.  WPARAM = text length; LPARAM = text ptr.
+/// Returns match start position, or -1 if not found.
+/// If targetStart > targetEnd the search is backward.
+pub(super) const SCI_SEARCHINTARGET: u32 = 2185;
+/// Replace the target text.  WPARAM = replacement length; LPARAM = text ptr.
+/// Returns the length of the replacement.
+pub(super) const SCI_REPLACETARGET:  u32 = 2194;
+
+// ── Selection ─────────────────────────────────────────────────────────────────
+
+/// Return the byte position of the selection anchor.
+pub(super) const SCI_GETSELECTIONSTART: u32 = 2143;
+/// Return the byte position of the selection caret end.
+pub(super) const SCI_GETSELECTIONEND:   u32 = 2145;
+/// Set both the anchor and caret, then scroll into view.
+/// WPARAM = anchor position; LPARAM = caret position.
+pub(super) const SCI_SETSEL:            u32 = 2163;
+/// Scroll to make the caret visible.
+pub(super) const SCI_SCROLLCARET:       u32 = 2169;
+
+// ── Undo grouping ─────────────────────────────────────────────────────────────
+
+/// Start a compound (grouped) undo action.
+pub(super) const SCI_BEGINUNDOACTION:   u32 = 2078;
+/// End a compound undo action.
+pub(super) const SCI_ENDUNDOACTION:     u32 = 2079;
+
+// ── Go To Line ───────────────────────────────────────────────────────────────
+
+/// Return the total number of lines in the document.
+pub(super) const SCI_GETLINECOUNT:      u32 = 2154;
+/// Return the byte position of the start of `line` (0-based).  WPARAM = line.
+pub(super) const SCI_POSITIONFROMLINE:  u32 = 2167;
+
+// ── Find flags (pub(crate) for use in window.rs) ──────────────────────────────
+
+/// Case-sensitive search flag for `SCI_SETSEARCHFLAGS`.
+pub(crate) const SCFIND_MATCHCASE: u32 = 0x0000_0004;
+/// Whole-word-only search flag for `SCI_SETSEARCHFLAGS`.
+pub(crate) const SCFIND_WHOLEWORD: u32 = 0x0000_0002;
+
 // ── Notifications — pub(crate) for WM_NOTIFY dispatch in window.rs ────────────
 
 /// Caret moved or selection changed.

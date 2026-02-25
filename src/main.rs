@@ -13,6 +13,7 @@ mod app;
 mod editor;
 mod error;
 mod platform;
+mod search;
 mod session;
 mod ui;
 

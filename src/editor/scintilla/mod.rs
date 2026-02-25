@@ -17,9 +17,10 @@
 //
 // ── Security note ─────────────────────────────────────────────────────────────
 //
-// `SciDll::load()` calls `LoadLibraryW("SciLexer.dll")` (filename only).
-// Windows resolves this to the application directory first on Win10/11.
-// Phase 10 will harden this to `LoadLibraryExW` with a full path.
+// `SciDll::load()` calls `LoadLibraryExW` with the absolute path to
+// `SciLexer.dll` inside the application directory (resolved via
+// `GetModuleFileNameW`).  `LOAD_WITH_ALTERED_SEARCH_PATH` ensures Windows
+// loads exactly that file and never falls back to CWD or PATH.
 
 #![allow(unsafe_code)]
 
@@ -36,14 +37,18 @@ use messages::{
     SCI_SEARCHINTARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETFIRSTVISIBLELINE, SCI_SETLEXER,
     SCI_SETSAVEPOINT, SCI_SETSEARCHFLAGS, SCI_SETSEL,
     SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETWRAPMODE, SCI_SETEOLMODE,
+    SCI_SETKEYWORDS, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD,
+    SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETSIZE,
     WM_CLEAR, WM_COPY, WM_CUT, WM_PASTE, WM_UNDO,
 };
 
 use windows::{
-    core::PCWSTR,
+    core::{PCWSTR, PWSTR},
     Win32::{
-        Foundation::{GetLastError, HINSTANCE, HMODULE, HWND, LPARAM, WPARAM},
-        System::LibraryLoader::{FreeLibrary, LoadLibraryW},
+        Foundation::{GetLastError, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, WPARAM},
+        System::LibraryLoader::{
+            FreeLibrary, GetModuleFileNameW, LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH,
+        },
         UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, SendMessageW, ShowWindow, HMENU, SW_HIDE, SW_SHOW,
             WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPSIBLINGS,
@@ -76,10 +81,47 @@ impl SciDll {
     /// This also registers the `"Scintilla"` Win32 window class, making it
     /// available for `ScintillaView::create`.
     pub(crate) fn load() -> Result<Self> {
-        let path: Vec<u16> = DLL_NAME.encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: path is a valid null-terminated UTF-16 string.
-        // LoadLibraryW searches the application directory first on Win10/11.
-        let dll = unsafe { LoadLibraryW(PCWSTR(path.as_ptr())) }.map_err(RivetError::from)?;
+        // Build an absolute path: <exe-dir>\SciLexer.dll
+        let full_path = {
+            // MAX_PATH is 260 wide chars; 32 768 covers all extended-length paths.
+            let mut buf = vec![0u16; 32_768];
+            // SAFETY: buf is large enough for any Windows path; passing
+            // HMODULE::default() (NULL) retrieves the calling process's exe path.
+            let len = unsafe {
+                GetModuleFileNameW(
+                    HMODULE::default(),
+                    PWSTR(buf.as_mut_ptr()),
+                    buf.len() as u32,
+                )
+            };
+            if len == 0 {
+                // SAFETY: GetLastError reads thread-local state set by the
+                // just-failed GetModuleFileNameW; no Win32 calls between them.
+                return Err(RivetError::Win32 {
+                    function: "GetModuleFileNameW",
+                    code: unsafe { GetLastError().0 },
+                });
+            }
+            buf.truncate(len as usize);
+            // Strip the exe filename, keeping the trailing backslash.
+            if let Some(sep) = buf.iter().rposition(|&c| c == b'\\' as u16) {
+                buf.truncate(sep + 1);
+            }
+            buf.extend(DLL_NAME.encode_utf16().chain(std::iter::once(0)));
+            buf
+        };
+
+        // SAFETY: full_path is a valid null-terminated UTF-16 absolute path.
+        // LOAD_WITH_ALTERED_SEARCH_PATH + absolute path: only the given file is
+        // attempted; CWD and PATH are never searched, preventing DLL hijacking.
+        let dll = unsafe {
+            LoadLibraryExW(
+                PCWSTR(full_path.as_ptr()),
+                HANDLE::default(),
+                LOAD_WITH_ALTERED_SEARCH_PATH,
+            )
+        }
+        .map_err(RivetError::from)?;
         Ok(Self(dll))
     }
 }
@@ -231,6 +273,104 @@ impl ScintillaView {
                 let _ = SendMessageW(self.hwnd, SCI_SETLEXER, WPARAM(SCLEX_NULL), LPARAM(0));
                 let _ = SendMessageW(self.hwnd, SCI_SETWRAPMODE, WPARAM(SC_WRAP_NONE), LPARAM(0));
             }
+        }
+    }
+
+    // ── Syntax highlighting ───────────────────────────────────────────────────
+
+    /// Set the Scintilla lexer by numeric SCLEX_* ID.
+    pub(crate) fn set_lexer(&self, lexer_id: usize) {
+        // SAFETY: hwnd valid; SCI_SETLEXER with a valid SCLEX_* ID is documented.
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_SETLEXER, WPARAM(lexer_id), LPARAM(0));
+        }
+    }
+
+    /// Set a keyword list for the given set index.
+    ///
+    /// `words` must be a null-terminated ASCII byte slice, e.g. `b"for while\0"`.
+    /// Scintilla copies the string internally; stack lifetime is safe.
+    pub(crate) fn set_keywords(&self, set_idx: usize, words: &[u8]) {
+        // SAFETY: hwnd valid; words is null-terminated ASCII that outlives the call.
+        unsafe {
+            let _ = SendMessageW(
+                self.hwnd,
+                SCI_SETKEYWORDS,
+                WPARAM(set_idx),
+                LPARAM(words.as_ptr() as isize),
+            );
+        }
+    }
+
+    /// Clone `STYLE_DEFAULT` into all 256 style slots.
+    ///
+    /// Call this AFTER configuring `STYLE_DEFAULT` and BEFORE setting per-token
+    /// colours so that font/size propagate to every slot.
+    pub(crate) fn style_clear_all(&self) {
+        // SAFETY: hwnd valid; SCI_STYLECLEARALL takes no parameters.
+        unsafe {
+            let _ = SendMessageW(self.hwnd, SCI_STYLECLEARALL, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    /// Set the foreground colour of a style slot.
+    ///
+    /// `colour` is a BGR COLORREF (0x00BBGGRR).  Use the `rgb!` macro in
+    /// `theme.rs` to convert from the more natural 0xRRGGBB form.
+    pub(crate) fn style_set_fore(&self, style: u32, colour: u32) {
+        // SAFETY: hwnd valid; SCI_STYLESETFORE with a valid COLORREF is documented.
+        unsafe {
+            let _ = SendMessageW(
+                self.hwnd, SCI_STYLESETFORE,
+                WPARAM(style as usize), LPARAM(colour as isize),
+            );
+        }
+    }
+
+    /// Set the background colour of a style slot.
+    pub(crate) fn style_set_back(&self, style: u32, colour: u32) {
+        // SAFETY: hwnd valid; SCI_STYLESETBACK with a valid COLORREF is documented.
+        unsafe {
+            let _ = SendMessageW(
+                self.hwnd, SCI_STYLESETBACK,
+                WPARAM(style as usize), LPARAM(colour as isize),
+            );
+        }
+    }
+
+    /// Enable or disable bold rendering for a style slot.
+    pub(crate) fn style_set_bold(&self, style: u32, bold: bool) {
+        // SAFETY: hwnd valid; SCI_STYLESETBOLD with 0/1 is documented.
+        unsafe {
+            let _ = SendMessageW(
+                self.hwnd, SCI_STYLESETBOLD,
+                WPARAM(style as usize), LPARAM(bold as isize),
+            );
+        }
+    }
+
+    /// Set the font name for a style slot.
+    ///
+    /// `font_name` must be a null-terminated ASCII byte slice, e.g. `b"Consolas\0"`.
+    /// Scintilla copies the string; stack lifetime is safe.
+    pub(crate) fn style_set_font(&self, style: u32, font_name: &[u8]) {
+        // SAFETY: hwnd valid; font_name is null-terminated ASCII that outlives the call.
+        unsafe {
+            let _ = SendMessageW(
+                self.hwnd, SCI_STYLESETFONT,
+                WPARAM(style as usize), LPARAM(font_name.as_ptr() as isize),
+            );
+        }
+    }
+
+    /// Set the point size for a style slot.
+    pub(crate) fn style_set_size(&self, style: u32, size: i32) {
+        // SAFETY: hwnd valid; SCI_STYLESETSIZE with a positive point size is documented.
+        unsafe {
+            let _ = SendMessageW(
+                self.hwnd, SCI_STYLESETSIZE,
+                WPARAM(style as usize), LPARAM(size as isize),
+            );
         }
     }
 
